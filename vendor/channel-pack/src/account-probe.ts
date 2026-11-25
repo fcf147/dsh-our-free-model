@@ -39,6 +39,13 @@ import { clineProductById } from './cline-product.js'
 import { zcodeProductById } from './zcode-product.js'
 import { GeminiAdapter } from './gemini-adapter.js'
 import { LoomyAdapter } from './loomy-adapter.js'
+// Restored channels (WorkBuddy China / Huawei Cloud): the probe must use the
+// real adapters, not fall through to "Unsupported probe adapter".
+import { BuddyAdapter } from './buddy-adapter.js'
+import { CodeArtsAdapter } from './llm-adapter.js'
+import { productById } from './product.js'
+import type { BuddyCredential } from './buddy.js'
+import type { CodeArtsCredential } from './types.js'
 import { GEMINI, GEMINI_DEFAULT_PROJECT, GEMINI_SESSION_LANE_SMOKE } from './gemini.js'
 import { LOOMY } from './loomy-product.js'
 import type { LobsteraiCredential } from './lobsterai.js'
@@ -230,7 +237,26 @@ async function probeWithAdapter(
     | TraeAdapter
     | GeminiAdapter
     | LoomyAdapter
-  if (lobsteraiProduct !== undefined) {
+    | BuddyAdapter
+    | CodeArtsAdapter
+  const buddyProduct = productById(entry.provider)
+  if (buddyProduct !== undefined) {
+    // WorkBuddy China / CodeBuddy → BuddyAdapter with its own product config.
+    // Only CODEBUDDY is restored; the international product is not registered.
+    adapter = new BuddyAdapter({
+      credentialRef: ref,
+      resolveCredential: async () => credential as BuddyCredential,
+      refresh: async () => {},
+      product: buddyProduct,
+    })
+  } else if (entry.provider === 'codearts') {
+    // Huawei Cloud CodeArts → HMAC-signed CodeArtsAdapter.
+    adapter = new CodeArtsAdapter({
+      credentialRef: ref,
+      resolveCredential: async () => credential as unknown as CodeArtsCredential,
+      refresh: async () => {},
+    })
+  } else if (lobsteraiProduct !== undefined) {
     adapter = new LobsteraiAdapter({
       credentialRef: ref,
       resolveCredential: async () => credential as LobsteraiCredential,
