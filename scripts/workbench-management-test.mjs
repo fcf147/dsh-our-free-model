@@ -72,15 +72,15 @@ try {
     assert.equal((await fetch(service.url + '/v1/models', { headers: { authorization: `Bearer ${managementKey}` } })).status, 401)
     assert.equal(JSON.stringify((await api('/summary')).body).includes(managementKey), false)
   })
-  await check('the disclaimer reads once, acknowledges durably, and names both excluded channels', async () => {
+  await check('the disclaimer reads once, acknowledges durably, and names the excluded channel', async () => {
     const first = await api('/disclaimer')
     assert.equal(first.status, 200)
     assert.equal(first.body.acknowledged, false, 'a fresh install has not acknowledged it')
-    assert.equal(first.body.version, 2)
+    assert.equal(first.body.version, 3)
     assert.ok(Array.isArray(first.body.sections) && first.body.sections.length >= 3)
     const copy = JSON.stringify(first.body)
     assert.match(copy, /WorkBuddy/i, 'WorkBuddy is named')
-    assert.match(copy, /Huawei/i, 'Huawei Cloud is named')
+    assert.match(copy, /CodeBuddy|CodeArts/i, 'restored channels are named')
     assert.match(copy, /与我们无关|与本项目作者及团队无关/, 'the team is stated as not responsible')
     assert.equal((await api('/disclaimer/ack', {})).status, 200)
     const second = await api('/disclaimer')
@@ -192,7 +192,10 @@ try {
     assert.equal(providers.status, 200)
     const presets = JSON.parse(providers.text)
     assert.ok(Array.isArray(presets.presets), 'the workspace reaches the engine API')
-    assert.ok(!JSON.stringify(presets).toLowerCase().includes('huawei'), 'the excluded channel stays out here too')
+    // The engine's `movable` deprecation list deliberately keeps every id; what
+    // matters is that no actionable surface offers the international build.
+    const actionable = JSON.stringify({ presets: presets.presets, movesTo: presets.movesTo, plugins: presets.plugins })
+    assert.ok(!/workbuddy[\s_-]*ai/i.test(actionable), 'the excluded international channel is not offered here')
     // Same session fence as every other workspace route.
     assert.equal((await api('/engine/status', undefined, false)).status, 401)
     assert.equal((await page('/api/management/engine/ui/', 'GET', false)).status, 401)

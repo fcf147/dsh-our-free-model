@@ -337,6 +337,10 @@ class MemoryStore implements ChannelPackStore {
  * 派生用例不校验顺序（恢复顺序由 refs 文件决定），但两者对齐后便于逐项核对。
  */
 const REF_PREFIX_TO_PROVIDER: ReadonlyArray<readonly [string, string]> = [
+  // Restored in this fork (WorkBuddy China / Huawei Cloud). The international
+  // WORKBUDDY prefix is intentionally NOT restored — that channel stays blocked.
+  ['CODEARTS', 'codearts'],
+  ['BUDDY', 'buddy'],
   ['LOBSTERAI', 'lobsterai'],
   ['QODER', 'qoder'],
   ['QODERCN', 'qodercn'],

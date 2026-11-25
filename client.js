@@ -5585,6 +5585,9 @@ window.__ModuleLoader__.load({
       { id: 'minimax', name: 'MiniMax Code', org: 'MiniMax', accent: '#E4007F', note: '设备码 + PKCE，每日签到', login: 'browser' },
       { id: 'zcode', name: 'ZCode', org: '智谱', accent: '#3B6EF6', note: '浏览器登录（需本机可开浏览器）', login: 'browser' },
       { id: 'gemini', name: 'Gemini', org: 'Google Code Assist', accent: '#4285F4', note: '本地回调 OAuth 免费线', login: 'browser' },
+      // Restored from this fork's git history (CodeBuddy China / Huawei Cloud).
+      { id: 'buddy', name: 'CodeBuddy', org: '腾讯', accent: '#0052D9', note: 'WorkBuddy 国内版 · 每日签到积分', login: 'browser' },
+      { id: 'codearts', name: '华为云 CodeArts', org: '华为云', accent: '#FF7500', note: '码道 · IAM 凭据 / 每日签到', login: 'browser' },
     ]
 
     /** 与现有 RPC 的能力对应：余额、每日领取及独立签到状态分别判断。 */
@@ -5599,6 +5602,8 @@ window.__ModuleLoader__.load({
       minimax: { claim: true, status: true },
       zcode: { claim: true, unit: 'tokens' },
       gemini: { unit: 'quota', quota: true },
+      buddy: { claim: true },
+      codearts: { claim: true },
     }
 
     /**

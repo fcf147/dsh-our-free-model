@@ -2,12 +2,11 @@
  * The disclaimer copy both surfaces show: the plugin's settings page and the
  * standalone/desktop console.
  *
- * The product carries no WorkBuddy and no Huawei Cloud channel. Those two are
- * excluded mechanically (`src/magpie-policy.js`, and the aggregate registry
- * through it), but an exclusion with no explanation leaves a user wondering
- * whether the channel is broken. This copy answers the two questions that
- * matter instead: those channels are not part of what this build offers, and
- * anything a user does with a channel is their own responsibility.
+ * This fork offers the WorkBuddy China (CodeBuddy) and Huawei Cloud MaaS
+ * (CodeArts) account channels again. Only WorkBuddy international
+ * ("workbuddy-ai") stays excluded (`src/magpie-policy.js`); an exclusion with
+ * no explanation leaves a user wondering whether the channel is broken, so
+ * this copy states what is offered, what is not, and where responsibility sits.
  *
  * The copy is data, not markup: each surface renders it in its own idiom, so
  * there is exactly one place to change what the product says. It is deliberately
@@ -15,13 +14,11 @@
  * purpose plainly, because that is the honest description of what it is.
  */
 
-export const DISCLAIMER_VERSION = 2
+export const DISCLAIMER_VERSION = 3
 
 /** Channels this build does not offer, named for the reader. */
 export const EXCLUDED_CHANNELS = Object.freeze([
-  'WorkBuddy 国内版（workbuddy，亦称 CodeBuddy）',
   'WorkBuddy 国际版（workbuddy-ai）',
-  '华为云 Huawei Cloud MaaS（huaweicloud，含 Token Plan）',
 ])
 
 export const DISCLAIMER = Object.freeze({
@@ -32,8 +29,8 @@ export const DISCLAIMER = Object.freeze({
   sections: Object.freeze([
     {
       id: 'excluded',
-      heading: '本插件不提供这三个渠道',
-      body: '本插件不包含、也不提供 WorkBuddy 国内版（workbuddy，亦称 CodeBuddy）、WorkBuddy 国际版（workbuddy-ai）与华为云 Huawei Cloud MaaS（huaweicloud，含 Token Plan）。这三者在插件端与桌面端均被移除：渠道列表、预设、登录入口、插件市场与模型目录里都不会出现，也无法通过导入配置或安装第三方插件启用。目录中看不到它们不是故障，是本项目的明确取舍，后续更新不会重新引入。',
+      heading: '本插件不提供此渠道',
+      body: '本插件不包含、也不提供 WorkBuddy 国际版（workbuddy-ai）。该渠道在插件端与桌面端均被移除：渠道列表、预设、登录入口、插件市场与模型目录里都不会出现，也无法通过导入配置或安装第三方插件启用。看不到它不是故障，是本项目的明确取舍。WorkBuddy 国内版（CodeBuddy）与华为云 Huawei Cloud MaaS（CodeArts）在本 fork 中已重新提供。',
     },
     {
       id: 'responsibility',

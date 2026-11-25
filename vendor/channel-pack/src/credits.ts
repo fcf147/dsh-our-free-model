@@ -334,3 +334,241 @@ export function formatClaimGains(totals: Partial<ClaimTotalsByUnit> | undefined)
   }
   return parts.length === 0 ? null : parts.join(', ')
 }
+
+
+// ── Restored WorkBuddy / CodeBuddy credit balance ─────────────────────────────
+// Ported verbatim from the pre-removal credits.ts. Self-contained: headers use
+// the restored buddy.ts constants, so no circular import.
+import {
+  BUDDY_DEPLOYMENT_TYPE,
+  HTTP_HEADER_DOMAIN,
+  HTTP_HEADER_PRODUCT,
+  HTTP_HEADER_PRODUCT_CODE,
+} from './buddy.js'
+import type { BuddyCredential } from './buddy.js'
+import type { BuddyProduct } from './product.js'
+
+/** Check-in status endpoint (the authoritative checkin-status source). */
+export const CHECKIN_ACTIVITY_STATUS_PATH = '/v2/billing/meter/checkin-activity-status'
+/** Daily check-in claim endpoint. */
+export const DAILY_CHECKIN_PATH = '/v2/billing/meter/daily-checkin'
+/** Balance query endpoint; both CodeBuddy CN and WorkBuddy serve it. */
+export const USER_RESOURCE_PATH = '/v2/billing/meter/get-user-resource'
+const REQUEST_TIMEOUT_MS = 30_000
+const BALANCE_TIMEOUT_MS = 30_000
+const PACKAGE_STATUS_EXPIRED = 3
+/** Business codes: "already claimed" / no qualification / activity ended. */
+const CODE_ALREADY_CLAIMED = 10001
+const CODE_ALREADY_CLAIMED_ALT = 1001
+const CODE_NO_QUALIFICATION = 1002
+const CODE_ACTIVITY_ENDED = 1003
+const UNPARSABLE_RESPONSE_MESSAGE = '请求失败或响应无法解析'
+
+function readNumber(source: Record<string, unknown>, key: string): number {
+  const value = source[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+function readString(source: Record<string, unknown>, key: string): string {
+  const value = source[key]
+  return typeof value === 'string' ? value : ''
+}
+function readPreciseNumber(source: Record<string, unknown>, baseKey: string): number {
+  const precise = source[`${baseKey}Precise`]
+  if (typeof precise === 'string') {
+    const parsed = Number.parseFloat(precise)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  if (typeof precise === 'number' && Number.isFinite(precise)) return precise
+  return readNumber(source, baseKey)
+}
+
+function parseCreditPackage(entry: Record<string, unknown>): CreditPackage {
+  const name = readString(entry, 'PackageName') || readString(entry, 'SubProductName') || readString(entry, 'PackageCode')
+  const unit = readString(entry, 'CapacityUnit') || readString(entry, 'OriginUnit')
+  const expiredTime = readString(entry, 'ExpiredTime')
+  const deductionEndTime = readNumber(entry, 'DeductionEndTime')
+  const expiredAt = expiredTime.length > 0 ? Date.parse(expiredTime.replace(' ', 'T')) : Number.NaN
+  const active = entry.Status !== PACKAGE_STATUS_EXPIRED
+    && !(Number.isFinite(expiredAt) && Date.now() >= expiredAt)
+    && !(deductionEndTime > 0 && Date.now() >= deductionEndTime)
+  return {
+    name, unit,
+    remaining: readPreciseNumber(entry, 'CycleCapacityRemain'),
+    total: readPreciseNumber(entry, 'CycleCapacitySize'),
+    used: readPreciseNumber(entry, 'CycleCapacityUsed'),
+    active,
+    cycleStartTime: readString(entry, 'CycleStartTime'),
+    cycleEndTime: readString(entry, 'CycleEndTime'),
+    expiredTime,
+    ...deductionEndTime > 0 ? { deductionEndTime } : {},
+  }
+}
+
+/** 构造签到/余额请求头（不含 X-Device-Token，实测非必需）。 */
+function checkinHeaders(credential: BuddyCredential, product: BuddyProduct): Headers {
+  const headers = new Headers()
+  headers.set('Authorization', `Bearer ${credential.access_token}`)
+  headers.set('Accept', 'application/json')
+  headers.set('Content-Type', 'application/json')
+  headers.set(HTTP_HEADER_DOMAIN, product.apiDomain || credential.domain || '')
+  headers.set(HTTP_HEADER_PRODUCT, BUDDY_DEPLOYMENT_TYPE)
+  headers.set(HTTP_HEADER_PRODUCT_CODE, product.productCode)
+  if (credential.user_id !== undefined && credential.user_id.length > 0) headers.set('X-User-Id', credential.user_id)
+  if (credential.enterprise_id !== undefined && credential.enterprise_id.length > 0) {
+    headers.set('X-Enterprise-Id', credential.enterprise_id)
+    headers.set('X-Tenant-Id', credential.enterprise_id)
+  }
+  headers.set('User-Agent', product.userAgent)
+  return headers
+}
+
+function readBool(source: Record<string, unknown>, key: string): boolean {
+  return source[key] === true
+}
+function readStringArray(source: Record<string, unknown>, key: string): string[] {
+  const value = source[key]
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
+type PostResult =
+  | { ok: true; body: Record<string, unknown> }
+  | { ok: false; message: string }
+
+function describeNonJsonResponse(status: number, text: string): string {
+  if (status === 401 || status === 403) return `凭据已失效（HTTP ${status}），请重新登录该账号`
+  const snippet = text.trim().slice(0, 80).replace(/\s+/g, ' ')
+  return `服务端返回了非 JSON 响应（HTTP ${status}）：${snippet}`
+}
+
+/** 发起一次签到请求并解析 JSON 响应体（非 JSON/网络错误都保留可读原因）。 */
+async function postJson(path: string, credential: BuddyCredential, product: BuddyProduct, fetcher: typeof fetch): Promise<PostResult> {
+  try {
+    const response = await fetcher(`${product.endpoint}${path}`, {
+      method: 'POST',
+      headers: checkinHeaders(credential, product),
+      body: '{}',
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    })
+    const text = await response.text()
+    let parsed: unknown
+    try { parsed = JSON.parse(text) } catch { return { ok: false, message: describeNonJsonResponse(response.status, text) } }
+    if (parsed === null || typeof parsed !== 'object') return { ok: false, message: UNPARSABLE_RESPONSE_MESSAGE }
+    return { ok: true, body: parsed as Record<string, unknown> }
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/** 查询 CodeBuddy 签到活动状态（权威端点 checkin-activity-status）。 */
+export async function fetchCheckinStatus(
+  credential: BuddyCredential,
+  product: BuddyProduct,
+  fetcher: typeof fetch = fetch,
+): Promise<CheckinStatus | null> {
+  const result = await postJson(CHECKIN_ACTIVITY_STATUS_PATH, credential, product, fetcher)
+  if (!result.ok) return null
+  const body = result.body
+  if (body.code !== 0) return null
+  const data = body.data
+  if (data === null || typeof data !== 'object') return null
+  const record = data as Record<string, unknown>
+  return {
+    active: readBool(record, 'active'),
+    todayCheckedIn: readBool(record, 'today_checked_in'),
+    streakDays: readNumber(record, 'streak_days'),
+    dailyCredit: readNumber(record, 'daily_credit'),
+    todayCredit: readNumber(record, 'today_credit'),
+    isStreakDay: readBool(record, 'is_streak_day'),
+    totalCredits: readNumber(record, 'total_credits'),
+    checkinDates: readStringArray(record, 'checkin_dates'),
+    activityName: readString(record, 'activity_name'),
+    themeName: readString(record, 'theme_name'),
+    endTime: readString(record, 'end_time'),
+  }
+}
+
+/** 执行 CodeBuddy 每日签到领取。判定以响应体 code 为准（重复领取是 HTTP 400）。 */
+export async function claimDailyCheckin(
+  credential: BuddyCredential,
+  product: BuddyProduct,
+  fetcher: typeof fetch = fetch,
+): Promise<ClaimOutcome> {
+  const result = await postJson(DAILY_CHECKIN_PATH, credential, product, fetcher)
+  if (!result.ok) return { kind: 'failed', code: -1, message: result.message }
+  const body = result.body
+  const code = typeof body.code === 'number' ? body.code : -1
+  const message = readString(body, 'msg')
+  if (code === CODE_ALREADY_CLAIMED || code === CODE_ALREADY_CLAIMED_ALT) {
+    return { kind: 'already-claimed', message: message.length > 0 ? message : '今天已签到' }
+  }
+  if (code === CODE_NO_QUALIFICATION || code === CODE_ACTIVITY_ENDED) {
+    return { kind: 'inactive', message: message.length > 0 ? message : '当前无领取资格' }
+  }
+  if (code !== 0) return { kind: 'failed', code, message: message.length > 0 ? message : '领取失败' }
+  const data = body.data
+  if (data === null || typeof data !== 'object') {
+    return { kind: 'failed', code, message: '领取响应缺少 data 字段' }
+  }
+  const record = data as Record<string, unknown>
+  const delayed = readString(record, 'message')
+  return {
+    kind: 'claimed',
+    credit: readNumber(record, 'credit'),
+    streakDays: readNumber(record, 'streak_days'),
+    isStreakDay: readBool(record, 'is_streak_day'),
+    ...delayed.length > 0 ? { delayedMessage: delayed } : {},
+  }
+}
+
+/**
+ * Query the remaining credit balance for one Buddy/CodeBuddy account.
+ * Returns null on network/parse/business failure so "unknown" stays distinct
+ * from a genuine zero balance. `data` is doubly nested:
+ * `data.Response.Data.Accounts[]`.
+ */
+export async function fetchCreditBalance(
+  credential: BuddyCredential,
+  product: BuddyProduct,
+  fetcher: typeof fetch = fetch,
+): Promise<CreditBalance | null> {
+  const headers = new Headers()
+  headers.set('Authorization', `Bearer ${credential.access_token}`)
+  headers.set('Accept', 'application/json')
+  headers.set('Content-Type', 'application/json')
+  headers.set(HTTP_HEADER_DOMAIN, product.apiDomain || credential.domain || '')
+  headers.set(HTTP_HEADER_PRODUCT, BUDDY_DEPLOYMENT_TYPE)
+  headers.set(HTTP_HEADER_PRODUCT_CODE, product.productCode)
+  if (credential.user_id) headers.set('X-User-Id', credential.user_id)
+  if (credential.enterprise_id) {
+    headers.set('X-Enterprise-Id', credential.enterprise_id)
+    headers.set('X-Tenant-Id', credential.enterprise_id)
+  }
+  headers.set('User-Agent', product.userAgent)
+  try {
+    const response = await fetcher(`${product.endpoint}${USER_RESOURCE_PATH}`, {
+      method: 'POST', headers, body: '{}', signal: AbortSignal.timeout(BALANCE_TIMEOUT_MS),
+    })
+    const text = await response.text()
+    let body: unknown
+    try { body = JSON.parse(text) } catch { return null }
+    if (body === null || typeof body !== 'object') return null
+    const record = body as Record<string, unknown>
+    if (record.code !== 0) return null
+    const outer = record.data
+    if (outer === null || typeof outer !== 'object') return null
+    const mid = (outer as Record<string, unknown>).Response
+    if (mid === null || typeof mid !== 'object') return null
+    const inner = (mid as Record<string, unknown>).Data
+    if (inner === null || typeof inner !== 'object') return null
+    const accounts = (inner as Record<string, unknown>).Accounts
+    if (!Array.isArray(accounts)) return null
+    const packages: CreditPackage[] = []
+    for (const item of accounts) {
+      if (item === null || typeof item !== 'object') continue
+      packages.push(parseCreditPackage(item as Record<string, unknown>))
+    }
+    const total = roundCredits(packages.reduce((sum, pkg) => sum + (pkg.active ? pkg.remaining : 0), 0))
+    const expiredTotal = roundCredits(packages.reduce((sum, pkg) => sum + (pkg.active ? 0 : pkg.remaining), 0))
+    return { total, packages, expiredTotal }
+  } catch { return null }
+}

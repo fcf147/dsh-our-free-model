@@ -233,10 +233,9 @@ try {
     assert.ok(presets.length > 0, 'the plugin management API must offer the built-in presets')
     assert.equal(new Set(presets.map(preset => preset.id)).size, presets.length,
       'preset ids must stay unique after filtering')
-    assert.ok(!presets.some(preset => preset.id === 'huaweicloud'), 'Huawei Cloud must not be offered')
-    assert.ok(!presets.some(preset => preset.id === 'workbuddy' || preset.id === 'workbuddy-ai' || preset.id === 'codebuddy'),
-      'the WorkBuddy/CodeBuddy builds must not be offered')
-    assert.ok(!JSON.stringify(presets).toLowerCase().includes('huawei'), 'no Huawei Cloud preset may reach the page')
+    // Only the international build is excluded in this fork; CodeBuddy (China)
+    // and Huawei Cloud presets are offered again.
+    assert.ok(!presets.some(preset => preset.id === 'workbuddy-ai'), 'WorkBuddy international must not be offered')
     for (const id of ['moonshot-cn', 'kimi-code', 'stepfun', 'stepfun-cn', 'tencent-cloud',
       'qwen-cn', 'qwen-token-plan', 'bailian-token-plan', 'qwencloud', 'qwencloud-token-plan', 'bedrock', 'nous', 'commandcode', 'modelscope',
       'aihubmix', 'pipellm', '302ai', 'cherryin', 'yylx', 'typesafe', 'vercel-jev', 'cloudflare-jev',

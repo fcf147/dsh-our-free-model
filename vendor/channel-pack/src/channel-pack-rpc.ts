@@ -17,6 +17,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { directFetch } from './direct-fetch.js'
 import { isSupportedProvider } from './channel-pack-store.js'
 import { credentialRef, type CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { AccountPool } from './account-pool.js'
@@ -29,12 +30,16 @@ import {
   isGatewayRunning,
   setGatewayDesiredEnabled,
 } from './openai-gateway/runtime.js'
+import type { CodeArtsAuth } from './service.js'
+import type { CodeArtsCredential } from './types.js'
+import type { BuddyAuth } from './buddy-auth.js'
 import type { LobsteraiAuth } from './lobsterai-auth.js'
 import type { QoderAuth } from './qoder-auth.js'
 import type { TraeAuth } from './trae-auth.js'
 import type { ClineAuth } from './cline-auth.js'
 import { LOOMY } from './loomy-product.js'
 import { creditExpiringWindowDays } from './credit-expiry-window.js'
+import { buddyExpiringWindowDays } from './buddy-balance-rank.js'
 import type { LoomyAuth } from './loomy-auth.js'
 import type { LoomyCredential } from './loomy.js'
 import { RACCOON } from './raccoon-product.js'
@@ -90,12 +95,19 @@ import {
   isClineRefreshable,
   type ClineCredential,
 } from './cline.js'
+import { decorateLoginUrl, fetchAuthState, runBuddyLoginFlow } from './buddy-oauth.js'
+import { credentialExpiresAtMs } from './buddy.js'
+import type { BuddyCredential } from './buddy.js'
 import {
+  claimDailyCheckin,
   claimUnitOf,
+  fetchCheckinStatus,
+  fetchCreditBalance,
   type CheckinStatus,
   type ClaimOutcome,
   type CreditBalance,
 } from './credits.js'
+import { CODEBUDDY, type BuddyProduct } from './product.js'
 import {
   captchaDemand,
   putSuppliedParam,
@@ -106,6 +118,10 @@ import {
   claimLobsteraiDailyCheckin,
   fetchLobsteraiCreditBalance,
 } from './lobsterai-credits.js'
+import {
+  claimCodeArtsDailyCheckin,
+  fetchCodeArtsAccountInfoDetailed,
+} from './codearts-credits.js'
 import {
   claimTraeDailyCheckin,
   fetchTraeCheckinStatus,
@@ -273,6 +289,30 @@ export function normalizeZcodeLoginProvider(raw: string | undefined): ZcodeLogin
   return ZCODE_LOGIN_PROVIDER
 }
 
+/** 解析 Buddy 凭据 JSON；解析失败返回 undefined。 */
+function parseBuddyCredential(raw: string): BuddyCredential | undefined {
+  try {
+    const parsed = JSON.parse(raw) as BuddyCredential
+    return typeof parsed === 'object' && parsed !== null && typeof parsed.access_token === 'string'
+      ? parsed
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** 解析 CodeArts 凭据 JSON；解析失败返回 undefined。 */
+function parseCodeArtsCredential(raw: string): CodeArtsCredential | undefined {
+  try {
+    const parsed = JSON.parse(raw) as CodeArtsCredential
+    return typeof parsed === 'object' && parsed !== null && typeof parsed.access_key_id === 'string'
+      ? parsed
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** 解析 LobsterAI 凭据 JSON；解析失败返回 undefined。 */
 function parseLobsteraiCredential(raw: string): LobsteraiCredential | undefined {
   try {
@@ -377,6 +417,8 @@ export function buildRaccoonNickname(
  */
 export const PERMANENT_LOCK_PROVIDERS: ReadonlySet<string> = new Set([
   LOOMY.id,
+  // CodeBuddy 的账号常同时持有「14 天内到期」与长期资源包，需要锁定保护。
+  CODEBUDDY.id,
 ])
 
 /**
@@ -441,8 +483,8 @@ export function computeClaimSummary(outcomes: readonly ClaimOutcome[]): RpcCredi
  * 单独单测：端点内不做任何业务判断，只负责取账号列表并转交下面的纯函数。
  */
 export interface CreditsEndpointDeps<
-  TCredential = unknown,
-  TProduct = unknown,
+  TCredential = BuddyCredential,
+  TProduct = BuddyProduct,
 > {
   /**
    * 解析凭据引用。
@@ -474,6 +516,12 @@ export interface CreditsEndpointDeps<
    * 故它传 `false` 跳过预检，直接交给 `claim`。
    */
   precheckStatus?: boolean
+  /**
+   * 默认实现（fetchCheckinStatus / claimDailyCheckin / fetchCreditBalance）
+   * 使用的 fetch。**必须经此注入**，否则这些面板附属查询会回落到裸 fetch、
+   * 绕过插件出口代理（issue #762，也是 CodeArts 签名请求的必经通道）。
+   */
+  fetcher?: typeof fetch
 }
 
 /**
@@ -487,12 +535,18 @@ export interface CreditsEndpointDeps<
  * 之外，任一账号的异常都会冒泡到 handleMethod 外层 catch，使整批请求以
  * `channel-pack/handler-failed` 失败——违背「单个账号失败不中断整体」的设计。
  */
-export async function collectCreditsStatus<TCredential = unknown, TProduct = unknown>(
+export async function collectCreditsStatus<TCredential = BuddyCredential, TProduct = BuddyProduct>(
   accounts: readonly ProviderAccountEntry[],
   product: TProduct,
   deps: CreditsEndpointDeps<TCredential, TProduct>,
 ): Promise<RpcCreditsStatusResponse['accounts']> {
-  const fetchStatus = deps.fetchStatus ?? (async () => { throw new Error('该渠道未提供签到状态查询') })
+  const fetcher = deps.fetcher ?? fetch
+  const fetchStatus = deps.fetchStatus
+    ?? (async (credential, product) => fetchCheckinStatus(
+      credential as unknown as BuddyCredential,
+      product as unknown as BuddyProduct,
+      fetcher,
+    ))
   const results: RpcCreditsStatusResponse['accounts'] = []
   // 顺序查询，避免并发触发风控
   for (const entry of accounts) {
@@ -523,13 +577,24 @@ export async function collectCreditsStatus<TCredential = unknown, TProduct = unk
  * 与 collectCreditsStatus 同理：凭据解析位于每个账号自己的 try 之内，
  * 异常只让该账号记为 failed。
  */
-export async function collectClaimResults<TCredential = unknown, TProduct = unknown>(
+export async function collectClaimResults<TCredential = BuddyCredential, TProduct = BuddyProduct>(
   accounts: readonly ProviderAccountEntry[],
   product: TProduct,
   deps: CreditsEndpointDeps<TCredential, TProduct>,
 ): Promise<RpcCreditsClaimAllResponse> {
-  const fetchStatus = deps.fetchStatus ?? (async () => { throw new Error('该渠道未提供签到状态查询') })
-  const claim = deps.claim ?? (async () => { throw new Error('该渠道未提供签到领取') })
+  const fetcher = deps.fetcher ?? fetch
+  const fetchStatus = deps.fetchStatus
+    ?? (async (credential, product) => fetchCheckinStatus(
+      credential as unknown as BuddyCredential,
+      product as unknown as BuddyProduct,
+      fetcher,
+    ))
+  const claim = deps.claim
+    ?? (async (credential, product) => claimDailyCheckin(
+      credential as unknown as BuddyCredential,
+      product as unknown as BuddyProduct,
+      fetcher,
+    ))
   const precheck = deps.precheckStatus !== false
   const results: RpcCreditsClaimAllResponse['results'] = []
   const outcomes: ClaimOutcome[] = []
@@ -584,12 +649,18 @@ export async function collectClaimResults<TCredential = unknown, TProduct = unkn
  * 凭据解析同样位于每个账号自己的 try 之内：单个账号的凭据缺失/损坏/名称非法
  * 都不会冒泡中断整批。
  */
-export async function collectCreditBalances<TCredential = unknown, TProduct = unknown>(
+export async function collectCreditBalances<TCredential = BuddyCredential, TProduct = BuddyProduct>(
   accounts: readonly ProviderAccountEntry[],
   product: TProduct,
   deps: CreditsEndpointDeps<TCredential, TProduct>,
 ): Promise<RpcCreditsBalancesResponse['accounts']> {
-  const fetchBalance = deps.fetchBalance ?? (async () => { throw new Error('该渠道未提供余额查询') })
+  const fetcher = deps.fetcher ?? fetch
+  const fetchBalance = deps.fetchBalance
+    ?? (async (credential, product) => fetchCreditBalance(
+      credential as unknown as BuddyCredential,
+      product as unknown as BuddyProduct,
+      fetcher,
+    ))
   const fetchDetailed = deps.fetchBalanceDetailed
   const results: RpcCreditsBalancesResponse['accounts'] = []
   // 顺序查询，避免并发触发风控
@@ -777,11 +848,19 @@ export function registerChannelPackRpc(
    */
   modelAdapters?: Readonly<Record<string, ModelCatalogSource>>,
   config: ChannelPackRpcConfig = {},
+  /**
+   * 新恢复的 provider 实例：**追加在末尾**，既有调用点全部位置传参，插队会错位
+   * （本仓库已复发 6 次）。`service`/`buddy` 可选，未恢复这两个渠道的宿主
+   * （如 standalone）无需传占位。
+   */
+  codearts?: CodeArtsAuth,
+  buddy?: BuddyAuth,
 ): void {
   ctx.inject(['connection'], (connectionCtx) => {
     registerChannelPackEndpoints(
       connectionCtx as Context, pool, lobsterai,
       qoder, qoderCn, trae, cline, loomy, raccoon, minimax, zcode, gemini, modelAdapters, config,
+      codearts, buddy,
     )
   })
 }
@@ -893,6 +972,8 @@ function registerChannelPackEndpoints(
   gemini: GeminiAuth,
   modelAdapters?: Readonly<Record<string, ModelCatalogSource>>,
   config: ChannelPackRpcConfig = {},
+  codearts?: CodeArtsAuth,
+  buddy?: BuddyAuth,
 ): void {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const connection = (ctx as any).connection ?? ctx.get('connection')
@@ -1266,6 +1347,17 @@ function registerChannelPackEndpoints(
    * 反过来（switch 先匹配）又会被别的 provider 的 case 误吞。
    */
   async function handleMethod(method: string, payload: unknown, signal?: AbortSignal): Promise<unknown> {
+    // CodeArts 的签名请求走 directFetch（由 index.ts 挂载到本插件的 signedNetwork）。
+    // 每个 RPC 独立绑定客户端取消信号：客户端断开后不再继续打上游。
+    const codeartsFetcher: typeof fetch = (input, init) => {
+      const fetcher = directFetch
+      if (!signal) return fetcher(input, init)
+      const upstreamSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined)
+      return fetcher(input, {
+        ...init,
+        signal: upstreamSignal ? AbortSignal.any([signal, upstreamSignal]) : signal,
+      })
+    }
     // 旧客户端仍可能携带退役 provider 或历史账号 id。拒绝调用但不删除数据。
     const request = payload !== null && typeof payload === 'object'
       ? payload as Record<string, unknown> : undefined
@@ -1296,7 +1388,80 @@ function registerChannelPackEndpoints(
         const id = `${provider}-${shortId()}`
         const suffix = shortId().toUpperCase()
         const refName = `${provider.toUpperCase()}_ACCOUNT_${suffix}`
-if (provider === LOBSTERAI.id) {
+        // CodeBuddy（buddy）走两步登录：先拿 loginUrl/state 立即返回，后台异步跑完整流程。
+        // ⚠️ 只认 CODEBUDDY：productById() 也会返回 WORKBUDDY（国际版），但那个渠道
+        // 继续屏蔽，绝不能借 buddy 的服务实例被意外装配。
+        const product = provider === CODEBUDDY.id ? CODEBUDDY : undefined
+        if (product !== undefined) {
+          if (buddy === undefined) {
+            return { ok: false, error: { code: 'provider-unsupported', message: '不支持此渠道。' } }
+          }
+          let state: string
+          let authUrl: string
+          try {
+            const authState = await fetchAuthState(undefined, undefined, product)
+            state = authState.state
+            authUrl = decorateLoginUrl(authState.authUrl, product)
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error)
+            throw new Error(`无法获取 ${product.displayName} 登录地址（Host 网络请求失败）：${reason}`)
+          }
+          const ref = credentialRef(refName)
+          await pool.addAccount({
+            id,
+            provider: product.id,
+            nickname: id,
+            enabled: true,
+            credentialRef: refName,
+            refreshable: false,
+            createdAt: Date.now(),
+          })
+          runBuddyLoginFlow({ openBrowser: () => {}, state, product }).then(async (flow) => {
+            await ctx.credentials.set(ref, flow.access)
+            buddy?.scheduleRefresh()
+            const credential = parseBuddyCredential(flow.access)
+            await pool.updateAccount(id, {
+              nickname: credential?.nickname ?? id,
+              expiresAt: credential ? credentialExpiresAtMs(credential) : undefined,
+              refreshable: Boolean(credential?.refresh_token),
+            })
+          }).catch((err) => {
+            ctx.logger.warn(`[channel-pack] background ${product.id} login failed for ${id}: ${err}`)
+            void pool.removeAccount(id).catch(() => {})
+          })
+          return { ok: true, value: { accountId: id, loginUrl: authUrl } }
+        } else if (provider === 'codearts') {
+          if (codearts === undefined) {
+            return { ok: false, error: { code: 'provider-unsupported', message: '不支持此渠道。' } }
+          }
+          // CodeArts 是回调式登录，同样两步返回，避免 window.open 被浏览器拦截。
+          const started = await codearts.startLogin({ refName })
+          await pool.addAccount({
+            id,
+            provider: 'codearts',
+            nickname: id,
+            enabled: true,
+            credentialRef: refName,
+            refreshable: false,
+            createdAt: Date.now(),
+          })
+          started.result.then(async (loginResult) => {
+            const credential = parseCodeArtsCredential(loginResult.access)
+            await pool.updateAccount(id, {
+              nickname: credential?.user_name !== undefined && credential.user_name.length > 0
+                ? credential.user_name
+                : id,
+              expiresAt: credential?.expires_at !== undefined
+                ? (Number.isNaN(Date.parse(credential.expires_at)) ? undefined : Date.parse(credential.expires_at))
+                : undefined,
+              refreshable: Boolean(credential?.refresh_token),
+            })
+          }).catch((error: unknown) => {
+            ctx.logger.warn(`[channel-pack] background codearts login failed for ${id}: ${String(error)}`)
+            void pool.removeAccount(id).catch(() => {})
+          })
+          return { ok: true, value: { accountId: id, loginUrl: started.loginUrl } }
+        } else if (provider === LOBSTERAI.id) {
 
           const started = await lobsterai.startLogin({ refName })
           await pool.addAccount({
@@ -1827,6 +1992,14 @@ if (provider === LOBSTERAI.id) {
           // 调用方是仓库外的脚本/手工 RPC。下面三处历史注释曾把它写成
           // 「账号卡片的刷新按钮」——那是失实的，会把排障的人引到不存在的 UI。
           switch (entry.provider) {
+            case 'codearts':
+              if (codearts === undefined) throw new Error('codearts 服务未装配')
+              await codearts.refreshAccountCredential(entry.credentialRef, pool, entry.id)
+              break
+            case 'buddy':
+              if (buddy === undefined) throw new Error('buddy 服务未装配')
+              await buddy.refreshAccountCredential(entry.credentialRef, pool, entry.id)
+              break
             case LOBSTERAI.id:
               await lobsterai.refreshAccountCredential(entry.credentialRef, pool, entry.id)
               break
@@ -2128,9 +2301,12 @@ if (provider === LOBSTERAI.id) {
             error: { code: 'bad-request', message: `该 provider 不支持锁定永久积分：${provider || '(空)'}` },
           }
         }
+        // CodeBuddy 的窗口可被 DSH_BUDDY_EXPIRING_WINDOW_DAYS 覆盖，前端文案必须
+        // 与选号判据一致，故回传当前生效值；其它 provider（Loomy）不带该字段。
         const lockResponse = (): RpcPermanentLockResponse => ({
           provider,
           locked: pool.permanentLocked(provider),
+          ...(provider === CODEBUDDY.id ? { windowDays: buddyExpiringWindowDays() } : {}),
         })
         if (req.locked === undefined) {
           return { ok: true, value: lockResponse() }
@@ -2316,6 +2492,26 @@ if (provider === LOBSTERAI.id) {
       // 各渠道显式分派协议，未知或退役渠道不调用任何默认端点。
       case 'credits.status': {
         const req = payload as RpcCreditsStatusRequest
+        if (req.provider === 'codearts') {
+          // CodeArts 没有独立的签到状态端点（签名协议，无 streak/dailyCredit 概念）。
+          const accounts = await pool.listAccounts(req.provider)
+          return {
+            ok: true,
+            value: {
+              accounts: accounts.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null })),
+            } satisfies RpcCreditsStatusResponse,
+          }
+        }
+        if (req.provider === CODEBUDDY.id) {
+          const product: BuddyProduct = CODEBUDDY
+          const accounts = await pool.listAccounts(req.provider)
+          const results = await collectCreditsStatus(accounts, product, {
+            resolve: (ref) => ctx.credentials.resolve(ref),
+            fetcher: config.fetcher,
+            warn: (msg) => ctx.logger?.warn?.(msg),
+          })
+          return { ok: true, value: { accounts: results } satisfies RpcCreditsStatusResponse }
+        }
         if (req.provider === LOBSTERAI.id) {
           // LobsterAI 没有独立的「签到状态」端点：活动状态要经
 
@@ -2390,6 +2586,27 @@ if (provider === LOBSTERAI.id) {
       case 'credits.claimAll': {
         const req = payload as RpcCreditsClaimAllRequest
         const accounts = await pool.listAccounts(req.provider)
+        if (req.provider === 'codearts') {
+          // CodeArts 走华为云 SDK-HMAC-SHA256 签名，领取自带活动/账户类型预检，
+          // 故跳过 CodeBuddy 式的状态查询（对华为端点发那个请求必然失败）。
+          const value = await collectClaimResults<CodeArtsCredential, undefined>(accounts, undefined, {
+            resolve: (ref) => ctx.credentials.resolve(ref),
+            claim: (credential) => claimCodeArtsDailyCheckin(credential, codeartsFetcher),
+            precheckStatus: false,
+            warn: (msg) => ctx.logger?.warn?.(msg),
+          })
+          return { ok: true, value: value satisfies RpcCreditsClaimAllResponse }
+        }
+        const buddyProduct = req.provider === CODEBUDDY.id ? CODEBUDDY : undefined
+        if (buddyProduct !== undefined) {
+          // CodeBuddy 的签到拆成「查状态 + 领取」两步；默认实现注入签名/出口 fetch。
+          const value = await collectClaimResults(accounts, buddyProduct, {
+            resolve: (ref) => ctx.credentials.resolve(ref),
+            fetcher: config.fetcher,
+            warn: (msg) => ctx.logger?.warn?.(msg),
+          })
+          return { ok: true, value: value satisfies RpcCreditsClaimAllResponse }
+        }
         if (isQoderFamily(req.provider)) {
           const { product } = requireQoderFamily(req.provider)
           // Qoder 的领取流程**自带活动列表查询**（loadCampaigns → 逐个 claim），
@@ -2601,6 +2818,47 @@ if (provider === LOBSTERAI.id) {
       case 'credits.balances': {
         const req = payload as RpcCreditsBalancesRequest
         const accounts = await pool.listAccounts(req.provider)
+        if (req.provider === 'codearts') {
+          // 余额来自 `statistics/plugin`（与账户类型检测同一个响应）。用带原因
+          // 的钩子：非积分账户要显示「Token 计费账户」而不是笼统的查询失败。
+          const values = await collectCreditBalances<CodeArtsCredential, undefined>(accounts, undefined, {
+            resolve: (ref) => ctx.credentials.resolve(ref),
+            fetchBalanceDetailed: async (credential) => {
+              const result = await fetchCodeArtsAccountInfoDetailed(credential, codeartsFetcher)
+              if (!result.ok) return { balance: null, error: `账户信息查询失败：${result.message}` }
+              const info = result.info
+              if (!info.isCreditPackage) {
+                return {
+                  balance: null,
+                  error: info.isTokenPackage
+                    ? 'Token 计费账户，无积分余额'
+                    : '非积分计费账户，无积分余额',
+                }
+              }
+              if (info.credit === undefined) return { balance: null, error: '未返回积分数据' }
+              return { balance: info.credit }
+            },
+            warn: (msg) => ctx.logger?.warn?.(msg),
+          })
+          return { ok: true, value: { accounts: values } satisfies RpcCreditsBalancesResponse }
+        }
+        const balanceProduct = req.provider === CODEBUDDY.id ? CODEBUDDY : undefined
+        if (balanceProduct !== undefined) {
+          // CodeBuddy 的余额来自 get-user-resource，资源包带扣费截止时间，
+          // 面板按临期/永久分桶，窗口天数必须与选号判据同源。
+          const values = await collectCreditBalances(accounts, balanceProduct, {
+            resolve: (ref) => ctx.credentials.resolve(ref),
+            fetcher: config.fetcher,
+            warn: (msg) => ctx.logger?.warn?.(msg),
+          })
+          return {
+            ok: true,
+            value: {
+              accounts: values,
+              windowDays: buddyExpiringWindowDays(),
+            } satisfies RpcCreditsBalancesResponse,
+          }
+        }
         if (req.provider === LOBSTERAI.id) {
           const values = await collectCreditBalances<LobsteraiCredential, typeof LOBSTERAI>(accounts, LOBSTERAI, {
             resolve: (ref) => ctx.credentials.resolve(ref),

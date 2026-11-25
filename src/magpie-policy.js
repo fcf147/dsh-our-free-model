@@ -1,31 +1,31 @@
 /**
  * Account channels this build does not offer.
  *
- * WorkBuddy is sold under two names and ships in two builds: the China build
- * ("workbuddy", also marketed as CodeBuddy) and the international build
- * ("workbuddy-ai"). Neither is offered: the community plugin that serves them
- * signs requests as WorkBuddy's own desktop client, which is a risk this
- * product will not carry. The engine is a pinned binary whose plugin market is
- * fetched at run time, so the exclusion is enforced here, at the management
- * boundary this application owns, rather than in the engine.
+ * Only WorkBuddy **international** ("workbuddy-ai", "WorkBuddy AI") is excluded:
+ * the community plugin that serves it signs requests as WorkBuddy's own desktop
+ * client, which is a risk this product will not carry. The engine is a pinned
+ * binary whose plugin market is fetched at run time, so the exclusion is
+ * enforced here, at the management boundary this application owns, rather than
+ * in the engine.
  *
- * Huawei Cloud MaaS ("huaweicloud", its Token Plan preset) is likewise not
- * offered: this build carries no Huawei channel, and the engine's pinned preset
- * list is the one surface that would otherwise reintroduce it.
+ * WorkBuddy **China** ("workbuddy", marketed as CodeBuddy) and Huawei Cloud
+ * MaaS ("huaweicloud", "codearts") are offered again in this fork: their
+ * implementations were restored from this repository's history into the
+ * channel pack, so the earlier blanket exclusion no longer applies to them.
  *
  * A channel is denied by its subscription id, by the preset that names it, by
  * the package that serves it, and by any name carrying one of the aliases below
  * — a third-party plugin can sign in to the same provider under any package
- * name, and the China build is listed under "CodeBuddy" as often as under
- * "WorkBuddy".
+ * name. The international build is matched with separator tolerance so the
+ * bare "workbuddy" / "codebuddy" spellings stay available.
  */
 
-const DENIED_IDS = new Set(['workbuddy', 'workbuddy-ai', 'huaweicloud', 'codebuddy', 'codebuddy-cn', 'codearts'])
-// Aliases, not a product name filter: every spelling a package, preset, agent
-// or provider row could carry for one of these channels. "CodeArts" is Huawei
-// Cloud's own coding plan, served by a community plugin rather than a preset.
-const DENIED_TEXT = /workbuddy|codebuddy|huaweicloud|huawei[\s-]*cloud|modelarts|codearts|华为云|码道/i
-export const POLICY_REFUSED = 'WorkBuddy and Huawei Cloud are not offered by this build'
+const DENIED_IDS = new Set(['workbuddy-ai'])
+// Only the international build is refused. `workbuddy[\s_-]*ai` covers
+// "workbuddy-ai", "workbuddy ai" and "workbuddy_ai" without swallowing the
+// bare "workbuddy" / "codebuddy" names that this build does offer.
+const DENIED_TEXT = /workbuddy[\s_-]*ai/i
+export const POLICY_REFUSED = 'WorkBuddy international (workbuddy-ai) is not offered by this build'
 
 /**
  * Whether an account channel is excluded from this build. Both the embedded

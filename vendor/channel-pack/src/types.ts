@@ -1446,3 +1446,53 @@ export interface RpcUsageAutoCheckinRequest {
 export interface RpcUsageAutoCheckinResponse {
   autoCheckin: RpcUsageAutoCheckinState
 }
+
+// ── Restored account channels (CodeArts / Huawei Cloud) ───────────────────────
+// These types were removed with the channel in 6fba52d and are restored here
+// for the from-history channel implementation. They are additive: no existing
+// row changes, so the current channels keep their exact shapes.
+
+/** Huawei Cloud MaaS ticket endpoint response (transit shape). */
+export interface CodeArtsCredentialResponse {
+  credential?: {
+    access?: string; secret?: string; securitytoken?: string; securityToken?: string
+    expires_at?: string; expiresAt?: string
+  }
+  result?: {
+    accessKeyId?: string; secretAccessKey?: string; securityToken?: string
+    expiration?: string; expiresAt?: string
+  }
+  domain_id?: string; user_id?: string; user_name?: string
+  error_code?: string; error_msg?: string
+}
+
+/** Normalized temporary credential stored under CODEARTS_ACCESS_TOKEN. */
+export interface CodeArtsCredential {
+  access_key_id: string
+  secret_access_key: string
+  security_token: string
+  expires_at: string
+  domain_id?: string; user_id?: string; user_name?: string
+  refresh_token?: string; code_verifier?: string
+  /** DPoP ES256 private JWK (shape defined in oauth.ts, imported via a local alias). */
+  dpop_private_key_jwk?: import('./oauth.js').DpopPrivateJwk
+  model_rate_limits?: Record<string, unknown>
+}
+
+/** Result of one CodeArts login flow. */
+export interface LoginFlowResult {
+  access: string
+  expires: number
+  loginUrl: string
+}
+
+/** Options accepted by the CodeArts login flow. */
+export interface LoginFlowOptions {
+  fetcher?: typeof fetch
+  openBrowser?: (url: string) => void | Promise<void>
+  maxAttempts?: number
+  flow?: 'oauth' | 'ticket'
+}
+
+/** Buddy credential (CodeBuddy/WorkBuddy China), defined alongside the protocol. */
+export type { BuddyCredential } from './buddy.js'

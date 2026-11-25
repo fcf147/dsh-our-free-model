@@ -139,6 +139,7 @@
   },
   "devDependencies": {
     "@gfx/zopfli": "^1.0.15",
+    "@types/node": "^26.6.6",
     "dsh-llm-legacy": "npm:@deepseek-ai/dsh-llm@0.1.5-rc.2",
     "esbuild": "0.25.9",
     "typescript": "^5.9.2",
@@ -152,5 +153,8 @@
       "@deepseek-ai/dsh-util-crypto": "0.1.5-rc.2",
       "@deepseek-ai/dsh-util-values": "0.1.5-rc.2"
     }
+  },
+  "dependencies": {
+    "jose": "^6.2.18"
   }
 }

@@ -2,12 +2,16 @@ import type { Context } from '@deepseek-ai/cordis'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { LlmError } from '@deepseek-ai/dsh-llm'
 import Schema from '@deepseek-ai/schemastery'
+import { registerCodeArtsLlm, PROVIDER as CODEARTS_PROVIDER } from './llm-adapter.js'
+import { registerBuddyLlm } from './buddy-adapter.js'
 import { registerLobsteraiLlm } from './lobsterai-adapter.js'
 import { registerQoderLlm } from './qoder-adapter.js'
 import { registerTraeLlm } from './trae-adapter.js'
 import { registerClineLlm } from './cline-adapter.js'
 import { registerLoomyLlm, parseLoomyRemoteModels } from './loomy-adapter.js'
 import { registerRaccoonLlm } from './raccoon-adapter.js'
+import { CODEARTS_CREDENTIAL_REF, CodeArtsAuth } from './service.js'
+import { BUDDY_CREDENTIAL_REF, BuddyAuth } from './buddy-auth.js'
 import { LobsteraiAuth } from './lobsterai-auth.js'
 import { QoderAuth } from './qoder-auth.js'
 import { TraeAuth } from './trae-auth.js'
@@ -28,6 +32,7 @@ import { nextUtc8DayStartMs } from './model-queue.js'
 import { hasLegacyNamespaceRegistration, settingsOf, suppressAutoSettingsPage } from './settings-compat.js'
 import type { ImageRequestTarget } from './image-budget.js'
 import { buildRaccoonNickname, registerChannelPackRpc } from './channel-pack-rpc.js'
+import { CODEBUDDY, type BuddyProduct } from './product.js'
 import { mountOpenAiGateway } from './openai-gateway/index.js'
 import { installLoopResume } from './loop-recovery.js'
 import {
@@ -35,11 +40,14 @@ import {
   reportLedgerAccount,
 } from './token-ledger.js'
 import { createTokenLedgerStore } from './token-ledger-store.js'
+import { buddyExpiringWindowDays } from './buddy-balance-rank.js'
+import { BuddyBalanceSelector, pickBuddyAccount } from './buddy-balance-selector.js'
 import { LOBSTERAI } from './lobsterai-product.js'
 import { QODER, QODER_CN } from './qoder-product.js'
 import { TRAE } from './trae-product.js'
 import { CLINE } from './cline-product.js'
 import { configureDeadModelStore, withDeadModelPruning } from './dead-model-store.js'
+import type { CodeArtsCredential, BuddyCredential } from './types.js'
 import type { LobsteraiCredential } from './lobsterai.js'
 import type { QoderCredential } from './qoder.js'
 import type { TraeCredential } from './trae.js'
@@ -67,6 +75,8 @@ import { deriveProjectId, opencodeUserAgent, opencodeUserAgentForVersion } from 
 import { primeOpencodeCapabilities, refreshOpencodeCapabilities } from './opencode-capability.js'
 import { closeAllProxyDispatchers } from './opencode-proxy.js'
 import { createChannelFetch, type ChannelOutlet } from './channel-fetch.js'
+import { attachDirectFetch, createDirectFetch } from './direct-fetch.js'
+export { directFetch, directLane, createDirectFetch, closeDirectFetch } from './direct-fetch.js'
 export { createChannelFetch, parseWindowsProxy, channelProxyBypassed } from './channel-fetch.js'
 import { execFile } from 'node:child_process'
 
@@ -248,6 +258,13 @@ export function makeReadImageRequest(ctx: Context) {
 
 export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?: ChannelOutlet } = {}): void {
   const network = createChannelFetch({ outlet: config.outlet })
+  // CodeArts 的签名请求需要独立的 undici 传输（不能走 globalThis.fetch）。当前
+  // `ChannelOutlet` 没有 `fetchSigned`，所以不把 outlet 传给 createDirectFetch，
+  // 而是用 `fetchImpl: network.fetch` 复用插件出口/代理选择；directFetch 供 RPC
+  // 侧的 credits 查询绑定同一传输。
+  const signedNetwork = createDirectFetch({ fetchImpl: network.fetch })
+  const detachSignedNetwork = attachDirectFetch(signedNetwork.fetch)
+  ctx.effect(() => () => { detachSignedNetwork(); void signedNetwork.close() })
   ctx.effect(() => () => { void network.close() })
   // 本插件自带 Channel Pack 设置页，关闭 0.1.7 起由 Config schema 反渲染的自动表单
   // （老契约没有 configure()，静默跳过）。
@@ -264,10 +281,12 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
   // ⚠️ 2026-10-01 起各 provider 已**不再**声明为可配置 provider，故这批 namespace
   // 在模型设置页上已无消费者（详见该函数头的说明）。
   registerProviderSettings(
-    ctx, 'llm-lobsterai',
+    ctx, 'llm-buddy', 'llm-codearts', 'llm-lobsterai',
     'llm-qoder', 'llm-qodercn', 'llm-trae', 'llm-cline', 'llm-loomy', 'llm-raccoon',
     'llm-minimax', 'llm-zcode', 'llm-gemini',
   )
+  // CodeArts 签名传输的 fetcher 必须由服务实例持有：续期/模型列表走独立出口。
+  const service = new CodeArtsAuth(ctx, { fetcher: signedNetwork.fetch })
   const pool = new AccountPool(ctx)
   const accountForRefresh = async (provider: string, accountId?: string) => {
     if (accountId === undefined) return pool.getAvailableAccount(provider, '')
@@ -352,6 +371,136 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
       'QUOTA_EXCEEDED',
     )
   }
+
+  // ===== CodeArts（华为云）服务 =====
+  // 不注册斜杠命令：登录、状态与续期统一在 Channel Pack 设置页完成。
+  const codearts = registerCodeArtsLlm(ctx, {
+    fetchImpl: signedNetwork.fetch,
+    credentialRef: credentialRef(CODEARTS_CREDENTIAL_REF),
+    resolveCredential: async () => {
+      // CodeArts 只认账号池（旧的 CODEARTS_ACCESS_TOKEN 单凭据模式已移除）。
+      const available = await pool.getAvailableAccount('codearts', '')
+      return available?.credential as CodeArtsCredential | undefined
+    },
+    // 刷新账号池里实际使用的账号，而不是默认单凭据 ref。
+    refresh: async () => {
+      const available = await accountForRefresh('codearts')
+      if (available) await service.refreshAccountCredential(available.entry.credentialRef, pool, available.entry.id)
+    },
+    fetchRemoteModels: () => service.refreshModels(pool),
+    accountPool: pool,
+  })
+
+  // ===== Buddy（腾讯 CodeBuddy 国内版）服务 =====
+  // 只恢复 CodeBuddy（product id 'buddy' / CODEBUDDY）；WorkBuddy 国际版继续屏蔽。
+  const resolveBuddyCredentialByRef = async (refName: string): Promise<BuddyCredential | undefined> => {
+    const resolved = await ctx.credentials.resolve(credentialRef(refName))
+    if (!resolved) return undefined
+    try {
+      return JSON.parse(resolved.value) as BuddyCredential
+    } catch {
+      return undefined
+    }
+  }
+
+  /** CodeBuddy 专属的按到期分档选号器（缓存不与任何其它产品共用）。 */
+  const buddyBalanceSelector = new BuddyBalanceSelector({
+    product: CODEBUDDY,
+    resolveCredential: resolveBuddyCredentialByRef,
+  })
+
+  /**
+   * CodeBuddy 的选号编排：按「enabled + 模型未受限」筛候选 → 按余额分档选号 → 取凭据。
+   * 锁定永久积分时若所有账号的「临期积分」都用尽则抛错，绝不回落到锁定的永久积分。
+   */
+  const pickBuddyCredential = async (options: {
+    modelId?: string
+    isFreeModel?: boolean
+  }): Promise<{ credential?: BuddyCredential; tried: Set<string> }> => {
+    const tried = new Set<string>()
+    const candidates = pool
+      .listAccountsByProvider(CODEBUDDY.id)
+      .filter(a => a.enabled)
+      .filter((a) => {
+        const key = options.modelId ?? ''
+        if (key.length === 0) return true
+        if (!a.modelRateLimits) return true
+        const resetAt = a.modelRateLimits[key]
+        return resetAt === undefined || resetAt === 0 || Date.now() >= resetAt
+      })
+      .map(a => ({ id: a.id, credentialRef: a.credentialRef }))
+
+    // 免费模型不扣积分，跳过「锁定永久积分」这道门，也不发余额查询。
+    if (options.isFreeModel === true) {
+      for (const candidate of candidates) {
+        const credential = await resolveBuddyCredentialByRef(candidate.credentialRef)
+        if (credential !== undefined) return { credential, tried }
+        tried.add(candidate.id)
+      }
+    }
+
+    const allowPermanent = !pool.permanentLocked(CODEBUDDY.id)
+    const picked = await pickBuddyAccount(buddyBalanceSelector, candidates, {
+      allowPermanent,
+      resolveCredential: resolveBuddyCredentialByRef,
+    })
+    if (picked.kind === 'account') {
+      return { credential: picked.credential, tried: new Set(picked.tried) }
+    }
+    for (const id of picked.tried) tried.add(id)
+    if (picked.kind === 'locked') {
+      const days = buddyExpiringWindowDays()
+      if (picked.reason?.kind === 'unknown') {
+        throw new Error(
+          'CodeBuddy：无法确认是否有可用账号。已锁定永久积分，而部分账号的余额查询失败'
+          + `（${picked.reason.errors.slice(0, 2).join('；')}）。这些账号**可能仍有**「${days} 天内到期」`
+          + '的积分 —— 请重试，或在 Channel Pack 对应面板检查凭据是否失效。',
+        )
+      }
+      throw new Error(
+        `CodeBuddy：没有可用账号。已锁定永久积分，而所有账号的「${days} 天内到期」`
+        + '积分都已用尽。请在 Channel Pack 的 CodeBuddy 面板解锁永久积分，或等待资源包到期后重新发放额度。',
+      )
+    }
+    return { tried }
+  }
+
+  const buddy = new BuddyAuth(ctx, { fetcher: signedNetwork.fetch })
+  const buddyAdapter = registerBuddyLlm(ctx, {
+    credentialRef: credentialRef(BUDDY_CREDENTIAL_REF),
+    resolveCredential: async (modelId?: string) => {
+      const picked = await pickBuddyCredential({
+        modelId,
+        // 免费模型跳过「锁定 + 临期积分」这道门（判据见 BuddyAdapter.isFreeModel）。
+        isFreeModel: await buddyAdapter.isFreeModel(modelId),
+      })
+      if (picked.credential) return picked.credential
+      const available = await pool.getAvailableAccount(CODEBUDDY.id, modelId ?? '', picked.tried)
+      if (available) {
+        reportLedgerAccount(CODEBUDDY.id, available.entry.id)
+        return available.credential as BuddyCredential
+      }
+      throwIfAllAccountsRateLimited(CODEBUDDY, modelId)
+      const resolved = await ctx.credentials.resolve(credentialRef(BUDDY_CREDENTIAL_REF))
+      if (!resolved) return undefined
+      try {
+        return JSON.parse(resolved.value) as BuddyCredential
+      } catch {
+        return undefined
+      }
+    },
+    refresh: async () => {
+      const available = await accountForRefresh(CODEBUDDY.id)
+      if (available) await buddy.refreshAccountCredential(available.entry.credentialRef, pool, available.entry.id)
+      else await buddy.refresh()
+    },
+    fetchRemoteModels: () => buddy.fetchModels(pool),
+    fetchImpl: signedNetwork.fetch,
+    readImage: makeReadImage(ctx),
+    readImageRequest: makeReadImageRequest(ctx),
+    accountPool: pool,
+    product: CODEBUDDY,
+  })
 
   // ===== LobsterAI (有道龙虾) 服务 =====
 
@@ -1406,6 +1555,8 @@ const zcodeAdapter = registerZcodeLlm(ctx, {
    * 「凭据一直刷不动」在日志里完全无痕（issue !IKIRTT 的可观测性条目）。
    */
   const refreshTargets: ReadonlyArray<readonly [string, (pool: AccountPool) => Promise<void>]> = [
+    ['codearts', (p) => service.refreshAll(p)],
+    ['buddy', (p) => buddy.refreshAll(p)],
     ['lobsterai', (p) => lobsterai.refreshAll(p)],
     ['qoder', (p) => qoder.refreshAll(p)],
     ['qodercn', (p) => qoderCn.refreshAll(p)],
@@ -1471,6 +1622,8 @@ const zcodeAdapter = registerZcodeLlm(ctx, {
     refreshTimer.unref?.()
     ctx.effect(() => () => {
       clearInterval(refreshTimer)
+      service.stop()
+      buddy.stop()
       lobsterai.stop()
       qoder.stop()
       qoderCn.stop()
@@ -1494,6 +1647,8 @@ const zcodeAdapter = registerZcodeLlm(ctx, {
 
   // 保留旧的 stop scheduler（兼容旧命令）
   ctx.effect(() => () => {
+    service.stop()
+    buddy.stop()
     lobsterai.stop()
     qoder.stop()
     qoderCn.stop()
@@ -1667,8 +1822,10 @@ const zcodeAdapter = registerZcodeLlm(ctx, {
     }
   }
   const modelAdapters: Record<string, { listAllModels(): readonly { id: string; name: string }[] }> = {
-
+    // `codearts` 是 registerCodeArtsLlm 返回的适配器实例（与 CodeArtsAuth
     // 服务实例 `service` 不同名，故这里可以简写）。
+    codearts: pruned(CODEARTS_PROVIDER, codearts),
+    buddy: pruned('buddy', buddyAdapter),
     lobsterai: pruned(LOBSTERAI.id, lobsteraiAdapter),
     qoder: pruned(QODER.id, qoderAdapter),
     qodercn: pruned(QODER_CN.id, qoderCnAdapter),
@@ -1690,8 +1847,9 @@ const zcodeAdapter = registerZcodeLlm(ctx, {
   registerChannelPackRpc(ctx, pool, lobsterai, qoder, qoderCn, trae, cline, loomy, raccoon, minimax, zcode, gemini, modelAdapters, {
     ...config,
     // ⚠️ 配额等附属查询必须复用同一出口；省略会让 gemini-credits 回落到裸 fetch。
+    // CodeArts 的 credits 查询需要签名传输（directFetch 已绑定到 signedNetwork.fetch）。
     fetcher: network.fetch,
-  })
+  }, service, buddy)
   // 网关是旁路功能：这里传 `pool` 只为读设置页里的开关，其内部任何失败都已
   // 自行降级为日志，绝不会让插件 apply() 失败。
   mountOpenAiGateway(ctx, pool)
