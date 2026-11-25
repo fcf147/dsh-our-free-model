@@ -1150,7 +1150,15 @@ export class CodeArtsAdapter extends LlmAdapter {
       // deepseek-v4.1-flash 等其它 benefit 模型调用失败（用户报障：
       // 发消息后报 Insufficient Balance / QUOTA —— 缺该头时后端按非 benefit
       // 通道处理该模型）。实证见 CODEARTS_BENEFIT_FALLBACK 注释。
-      const extraSignedHeaders = isBenefitModel && !benefitHeaderDropped ? { maas_type: 'benefit' } : undefined
+      // FORK FIX: never sign `maas_type: benefit`. The pre-removal build did
+      // sign it, but the current gateway routes that signed request to a
+      // non-existent environment (HTTP 404 APIG.0101), while the same request
+      // WITHOUT the signed benefit header authenticates fine (only normal
+      // per-model rate limiting applies). The maintained dsh-connect-codearts
+      // plugin reaches the same conclusion: AK/SK + no benefit signature is
+      // the only combination that reliably returns content. Keep the variable
+      // below so the legacy BENEFIT_NOT_FOUND retry remains harmless.
+      const extraSignedHeaders = undefined
       const signed = await signRequestHuawei(
         credential.access_key_id,
         credential.secret_access_key,

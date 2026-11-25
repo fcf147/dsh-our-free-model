@@ -36614,7 +36614,7 @@ var CodeArtsAdapter = class extends LlmAdapter {
     if (currentAccountId) rateLimitTried.add(currentAccountId);
     const isBenefitModel = isCodeArtsBenefitModel(options.model);
     for (; ; ) {
-      const extraSignedHeaders = isBenefitModel && !benefitHeaderDropped ? { maas_type: "benefit" } : void 0;
+      const extraSignedHeaders = void 0;
       const signed = await signRequestHuawei(
         credential.access_key_id,
         credential.secret_access_key,
