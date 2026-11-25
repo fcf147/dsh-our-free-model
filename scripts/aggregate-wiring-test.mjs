@@ -112,6 +112,7 @@ const dataDir = path.join(home, 'our-free-model')
 fs.mkdirSync(dataDir, { recursive: true })
 fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({
   enabled: true,
+  autoFreeOnly: false,
   probeIntervalMinutes: 15,
   forward: { enabled: true, host: '127.0.0.1', port: forwardPort, lan: { enabled: false, port: 0 } },
   tokenSaver: { enabled: true, rtk: true, prompts: { caveman: 'lite', ponytail: 'off' } },

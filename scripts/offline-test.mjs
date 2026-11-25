@@ -52,6 +52,9 @@ const { ROUTE_MAIN } = await import('../src/adapter.js')
 
 /** Boot one plugin generation against its own scratch home. */
 async function boot({ config = {}, settings = {} } = {}) {
+  // This suite asserts the per-model transport contract; opt out of this fork's
+  // "Our Auto Free" picker consolidation so turns run against a raw free row.
+  settings = { autoFreeOnly: false, ...settings }
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ofm-offline-'))
   process.env.DSH_HOME = home
   if (Object.keys(settings).length > 0) {

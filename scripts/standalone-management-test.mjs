@@ -111,7 +111,7 @@ async function verifyCoreManagementSummary() {
   const coreKey = 'isolated-core-management-summary'
   const logger = { warn() {} }
   const stores = createRuntimeStores({ dataDir: coreDataDir, logger })
-  stores.settings.update({ enabled: true, exposeRegionModels: true, combos: [], forwardKey: coreKey })
+  stores.settings.update({ enabled: true, exposeRegionModels: true, autoFreeOnly: false, combos: [], forwardKey: coreKey })
   const runtime = createModelRuntime({ ...stores, logger })
   const management = createManagement({
     stores, runtime,

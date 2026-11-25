@@ -36,6 +36,23 @@ export const COMBO_CHANNEL = 'combo'
 export const COMBO_PREFIX = 'combo:'
 export const COMBO_STRATEGIES = ['fallback', 'round-robin', 'smart', 'usage', 'pace']
 
+/**
+ * The built-in "Our Auto Free" chain (this fork's consolidated keyless lane).
+ *
+ * The two keyless lanes — the anonymous free lane and Kilo's free pool —
+ * collapse into one virtual model in the picker. Its chain is rebuilt from the
+ * live rosters on every catalog merge, so a model the upstream added joins the
+ * pool and one it withdrew leaves it without a release. The raw rows stay in
+ * the catalog (the adapter needs their endpoints); only the picker hides them.
+ */
+export const AUTO_FREE_ID = `${COMBO_PREFIX}our-auto-free`
+export const AUTO_FREE_NAME = 'Our Auto Free'
+
+/** Is this catalog row the built-in auto router over the keyless lanes? */
+export function isAutoFreeEntry(entry) {
+  return entry?.id === AUTO_FREE_ID && isComboEntry(entry)
+}
+
 /** Rotation cursors, keyed by combo id. In-memory on purpose (see the header). */
 const rotation = new Map()
 
@@ -159,6 +176,50 @@ export function buildComboCatalog(combos, catalog) {
   return out
 }
 
+/**
+ * Build the single "Our Auto Free" virtual row from the two live keyless
+ * rosters. Every free anonymous row and every Kilo free-pool row becomes a
+ * candidate link; the entry's capacities are the honest intersection so a
+ * fallback never receives an image or a window it cannot serve. The row is
+ * rebuilt on every catalog merge (see `rebuildCatalog` in core/runtime), which
+ * is what makes the membership track the upstream rosters without a release.
+ *
+ * @param {Array<object>} freeRows - the anonymous free lane catalog
+ * @param {Array<object>} kiloRows - the Kilo free-pool catalog
+ * @returns {object|null} the virtual combo entry, or null when both lanes are empty
+ */
+export function buildAutoFreeEntry(freeRows, kiloRows) {
+  const members = []
+  const seen = new Set()
+  for (const row of [...(freeRows ?? []), ...(kiloRows ?? [])]) {
+    if (row === null || typeof row !== 'object' || isComboEntry(row)) continue
+    if (typeof row.id !== 'string' || row.id === '' || seen.has(row.id)) continue
+    seen.add(row.id)
+    members.push(row)
+  }
+  if (members.length === 0) return null
+  return {
+    id: AUTO_FREE_ID,
+    name: AUTO_FREE_NAME,
+    channel: COMBO_CHANNEL,
+    combo: members.map(member => member.id),
+    strategy: 'auto',
+    stickyLimit: 1,
+    enabled: true,
+    autoFree: true,
+    vision: members.every(member => member.vision === true),
+    reasoning: members.some(member => member.reasoning === true),
+    // Honest intersection, not union: a fallback must never be handed an image
+    // or a window/ceiling it cannot serve just because the head offered one.
+    contextWindow: Math.min(...members.map(member => number(member.contextWindow) ?? 131072)),
+    maxOutput: Math.min(...members.map(member => number(member.maxOutput) ?? 32768)),
+    canDisableThinking: members.every(member => member.canDisableThinking !== false),
+    regionSensitive: false,
+    wire: 'chat',
+    lanes: [...new Set(members.flatMap(member => member.lanes ?? [member.channel ?? 'free']))],
+  }
+}
+
 function number(value) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.trunc(value) : undefined
 }
@@ -189,7 +250,7 @@ export function comboChain(entry, catalog, options = {}) {
     return row ? isComboEntry(row) ? comboChain(row, catalog, { ...options, path }) : [row] : []
   }).filter(row => { if (dedup.has(row.id)) return false; dedup.add(row.id); return true })
   if (members.length <= 1) return members
-  if (['smart', 'usage', 'pace'].includes(entry.strategy)) {
+  if (['smart', 'usage', 'pace', 'auto'].includes(entry.strategy)) {
     const now = Number.isFinite(options.now) ? options.now : Date.now()
     const readings = row => {
       const quota = options.quota?.[row.id]
@@ -211,11 +272,23 @@ export function comboChain(entry, catalog, options = {}) {
       const pace = weekly && Number.isFinite(hours) && hours > 0 ? weekly.remainingPercent / Math.max(hours, 1 / 60) : null
       const use = options.usage?.[row.id]
       const usage = typeof use === 'number' && Number.isFinite(use) && use >= 0 ? use : null
-      return { row, index, exhausted, known: windows.length > 0, reset, pace, usage }
+      // `auto` also reads the passive availability learner: a model this egress
+      // already proved good goes first; one it proved unavailable goes last.
+      const state = options.availability?.[row.id]
+      const measured = state === 'available' || state === 'throttled'
+      const rejected = state === 'unavailable'
+      return { row, index, exhausted, known: windows.length > 0, reset, pace, usage, measured, rejected }
     }
     return members.map(score).sort((left, right) => {
       if (left.exhausted !== right.exhausted) return left.exhausted ? 1 : -1
-      if (entry.strategy === 'usage') {
+      if (entry.strategy === 'auto') {
+        // Never lead with a model this egress already refused; prefer one it
+        // answered before; then spread load by ascending lifetime usage.
+        if (left.rejected !== right.rejected) return left.rejected ? 1 : -1
+        if (left.measured !== right.measured) return left.measured ? -1 : 1
+        if ((left.usage !== null) !== (right.usage !== null)) return left.usage !== null ? -1 : 1
+        if (left.usage !== null && right.usage !== null && left.usage !== right.usage) return left.usage - right.usage
+      } else if (entry.strategy === 'usage') {
         if ((left.usage !== null) !== (right.usage !== null)) return left.usage !== null ? -1 : 1
         if (left.usage !== null && right.usage !== null && left.usage !== right.usage) return left.usage - right.usage
       } else if (entry.strategy === 'pace') {

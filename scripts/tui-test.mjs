@@ -36,7 +36,7 @@ fs.mkdirSync(path.join(scratch, 'our-free-model'), { recursive: true })
 // killed it with nothing printed to say why.
 const forwardPort = await freePort()
 fs.writeFileSync(path.join(scratch, 'our-free-model', 'settings.json'), JSON.stringify({
-  version: 1, enabled: true, forward: { enabled: true, host: '127.0.0.1', port: forwardPort, lan: { enabled: true, port: 0 } },
+  version: 1, enabled: true, autoFreeOnly: false, forward: { enabled: true, host: '127.0.0.1', port: forwardPort, lan: { enabled: true, port: 0 } },
 }), { mode: 0o600 })
 // The sealed roster persists under catalog.json. This composition has no
 // profileContext, so the host gate refuses the lane; the refusal has to say so

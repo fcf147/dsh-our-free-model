@@ -516,7 +516,8 @@ export function apply(ctx, config) {
   // policy, so discovery refreshes the listing only.
   ctx.llm.registerModelDiscovery?.(ctx.fiber?.entry?.options?.id ?? name, async () => {
     await refreshCatalog({ probe: false, force: true })
-    const advertised = new Set(Object.values(state().membership).flat())
+    const snapshot = state()
+    const advertised = new Set(Object.values(snapshot.picker ?? snapshot.membership).flat())
     return modelRuntime.catalog
       .filter(entry => advertised.has(entry.id))
       .map(entry => ({
@@ -1282,7 +1283,7 @@ export function apply(ctx, config) {
           id: entry.id, name: entry.name, channel: entry.channel ?? 'free', vision: entry.vision === true,
           contextWindow: entry.contextWindow, maxOutput: entry.maxOutput,
         })),
-        usable: state().catalog.filter(isComboEntry).map(publicCombo),
+        usable: state().catalog.filter(entry => isComboEntry(entry) && !entry.autoFree).map(publicCombo),
         strategies: [...COMBO_STRATEGIES],
       }),
       preview: patch => {
@@ -1302,7 +1303,7 @@ export function apply(ctx, config) {
         settings.update({ combos: rows })
         settings.flush()
         const catalog = syncAggregateCatalog()
-        return { combos: rows, usable: catalog.filter(isComboEntry).map(publicCombo) }
+        return { combos: rows, usable: catalog.filter(entry => isComboEntry(entry) && !entry.autoFree).map(publicCombo) }
       },
     },
     // ── token savers ────────────────────────────────────────────────────────
@@ -2240,7 +2241,7 @@ export function createApiRoutes(deps) {
         const patch = await readJson(req)
         const visibility = validateModelVisibility(patch)
         const current = deps.settings.get()
-        const next = sanitizeSettings({ ...current, ...pick(patch, ['enabled', 'exposeRegionModels', 'probeIntervalMinutes', 'defaultMaxTokens', 'announcementAck', 'feedUrl', 'feedPollMinutes', 'notifyOs', 'updateCheckHours', 'autoReloadWatch', 'freeLane', 'developerPlugins', 'autoUpdateExtensions']), ...visibility }, current)
+        const next = sanitizeSettings({ ...current, ...pick(patch, ['enabled', 'exposeRegionModels', 'autoFreeOnly', 'probeIntervalMinutes', 'defaultMaxTokens', 'announcementAck', 'feedUrl', 'feedPollMinutes', 'notifyOs', 'updateCheckHours', 'autoReloadWatch', 'freeLane', 'developerPlugins', 'autoUpdateExtensions']), ...visibility }, current)
         if (next.autoReloadWatch === true && deps.update.status().hotReloadAvailable === false) next.autoReloadWatch = false
         if (patch.forward !== undefined) {
           const forward = { ...(current.forward ?? {}), ...pick(patch.forward, ['enabled', 'host', 'port']) }
@@ -2295,6 +2296,9 @@ export function createApiRoutes(deps) {
           return send(500, { error: 'could not persist settings' })
         }
         if (Object.keys(visibility).length > 0) deps.onVisibilityChanged?.()
+        // A change to autoFreeOnly (or combos/aggregate) changes the catalog
+        // topology without an upstream round; rebuild it now.
+        deps.syncAggregateCatalog?.()
         await deps.syncForward()
         await deps.syncRelay()
         await deps.syncEgress()
@@ -2763,6 +2767,7 @@ function publicSettings(settings, forwardInfo, egressInfo) {
     ...publicModelVisibility(settings),
     enabled: settings.enabled !== false,
     exposeRegionModels: settings.exposeRegionModels !== false,
+    autoFreeOnly: settings.autoFreeOnly !== false,
     probeIntervalMinutes: settings.probeIntervalMinutes ?? 15,
     defaultMaxTokens: settings.defaultMaxTokens ?? 32768,
     announcementAck: settings.announcementAck ?? '',

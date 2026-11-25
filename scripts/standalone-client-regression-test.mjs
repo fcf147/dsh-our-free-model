@@ -179,7 +179,7 @@ const memoryStore = value => {
 }
 const visibilityRuntime = ({ entries = [], sealIds = [], kiloRows = [], settings = {} }) => createModelRuntime({
   settings: memoryStore({
-    enabled: true, hiddenModelIds: [], hideFreeModels: false, hideEacModels: false,
+    enabled: true, autoFreeOnly: false, hiddenModelIds: [], hideFreeModels: false, hideEacModels: false,
     exposeRegionModels: true, combos: [], aggregate: { enabled: false, providers: {} }, ...settings,
   }),
   stats: memoryStore({ models: {} }),

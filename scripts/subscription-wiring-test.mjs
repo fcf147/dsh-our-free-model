@@ -59,7 +59,7 @@ const silent = { warn() {}, info() {} }
 const setup = (subscriptionRuntime, options = {}) => {
   const store = createRuntimeStores({ dataDir: path.join(scratch, crypto.randomUUID()), logger: silent })
   stores.push(store)
-  store.settings.update({ combos: [] })
+  store.settings.update({ autoFreeOnly: false, combos: [] })
   const runtime = createModelRuntime({ ...store, subscriptionRuntime, logger: silent, ...options })
   runtimes.push(runtime)
   return { ...store, runtime }
@@ -540,7 +540,7 @@ try {
     fs.mkdirSync(dataDir, { recursive: true })
     const port = await freePort()
     fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({
-      enabled: true, combos: [], forwardKey: 'fixture-gateway-key',
+      enabled: true, autoFreeOnly: false, combos: [], forwardKey: 'fixture-gateway-key',
       forward: { enabled: true, host: '127.0.0.1', port }, tokenSaver: { enabled: false },
     }))
     const routes = []

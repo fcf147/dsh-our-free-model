@@ -153,7 +153,11 @@ export class FreeModelAdapter {
   /** Models this route advertises right now. */
   async listModels(provider) {
     const state = this.deps.state()
-    const ids = new Set(state.membership[provider] ?? [])
+    // This fork's consolidated lane: the harness picker sees only "Our Auto
+    // Free" for the keyless lanes; the raw rows remain routable through the
+    // adapter's own dispatch and the forward gateway.
+    const advertised = state.picker ?? state.membership
+    const ids = new Set(advertised[provider] ?? [])
     return state.catalog
       .filter(entry => ids.has(entry.id))
       .map(entry => ({
@@ -1062,6 +1066,10 @@ function describe(entry, settings) {
   // A chain's own detail line: which models it will try, in order. Without it a
   // combo in the picker looks like one more model with no endpoint behind it.
   if (isComboEntry(entry)) {
+    if (entry.autoFree === true) {
+      parts.push(`auto-routes across ${entry.combo.length} free models, refreshed with the upstream rosters`)
+      return parts.join(' · ')
+    }
     parts.push(`${entry.combo.length}-model chain: ${entry.combo.join(' -> ')}`)
     if (entry.strategy === 'round-robin') parts.push('rotating start')
     return parts.join(' · ')

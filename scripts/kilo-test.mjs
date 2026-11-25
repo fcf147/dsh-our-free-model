@@ -154,6 +154,9 @@ const ctx = fakeContext({ inject, mounted: ['llm', 'webServer', 'attachments'], 
 apply(ctx, {})
 const api = () => routes.find(route => route.kind === 'prefix')?.handler
 await until(() => api() !== undefined, { what: 'the settings API route', timeoutMs: 5000 })
+// This suite asserts the raw Kilo rows in the picker; opt out of this fork's
+// "Our Auto Free" consolidation so the upstream contract stays under test.
+await callRoute(api(), 'POST', '/api/our-free-model/settings', { autoFreeOnly: false })
 
 // The boot round (egress sync → catalog refresh) is an async effect; poll the
 // summary until the Kilo roster has landed.

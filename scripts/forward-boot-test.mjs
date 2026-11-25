@@ -47,7 +47,7 @@ process.env.DSH_HOME = scratch
 const forwardPort = await freePort()
 fs.mkdirSync(path.join(scratch, 'our-free-model'), { recursive: true })
 fs.writeFileSync(path.join(scratch, 'our-free-model', 'settings.json'), JSON.stringify({
-  version: 1, enabled: true, forward: { enabled: true, host: '127.0.0.1', port: forwardPort },
+  version: 1, enabled: true, autoFreeOnly: false, forward: { enabled: true, host: '127.0.0.1', port: forwardPort },
 }), { mode: 0o600 })
 
 const { apply, inject } = await import('../index.js')

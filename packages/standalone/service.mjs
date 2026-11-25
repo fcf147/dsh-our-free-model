@@ -268,6 +268,9 @@ export async function startStandalone({
     const existingKey = settings.get().forwardKey
     const key = typeof existingKey === 'string' && existingKey !== '' ? existingKey : generateKey()
     const savedLanPort = settings.get().standaloneLanPort
+    // The standalone gateway keeps the upstream per-model picker; the
+    // consolidated "Our Auto Free" row belongs to the DSH plugin selector.
+    settings.update({ autoFreeOnly: false })
     settings.update({
       forwardKey: key,
       managementKey: typeof settings.get().managementKey === 'string' && settings.get().managementKey !== ''
@@ -354,6 +357,9 @@ export async function startStandalone({
     const publicRows = () => {
       const snapshot = completeState()
       const coreRoutable = core.catalog.filter(row => snapshot.routableRows.has(row))
+      // The consolidated "Our Auto Free" lane: the standalone gateway also
+      // advertises one row for the keyless lanes. The raw rows remain routable
+      // internally (combo links), just not listed as separate choices.
       const coreMembership = { [ROUTE_MAIN]: [...new Set(coreRoutable.map(row => row.id))] }
       return [
         ...publicCoreModelRows({ ...snapshot, catalog: coreRoutable, membership: coreMembership }),

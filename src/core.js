@@ -191,7 +191,7 @@ import path from "node:path";
 import { FreeModelAdapter, ROUTE_MAIN as ROUTE_MAIN2, ROUTE_REGION as ROUTE_REGION2 } from "./adapter.js";
 import { buildCatalog, buildEacCatalog, buildKiloCatalog, catalogFamilyKeys, isEacEntry, isKiloEntry, parseListing, reviveKiloCatalog } from "./catalog.js";
 import { buildAggregateCatalog, isAggregateEntry } from "./aggregate.js";
-import { buildComboCatalog, isComboEntry, normalizeCombos, pruneRotation } from "./combos.js";
+import { buildAutoFreeEntry, buildComboCatalog, isAutoFreeEntry, isComboEntry, normalizeCombos, pruneRotation } from "./combos.js";
 import { JsonStore, SETTINGS_INITIAL, STATS_INITIAL, STATS_VERSION, buildModelVisibility, migrateStats, pruneDays, recordTurn, recordUsage, isModelHidden } from "./store.js";
 import { STATE, detectEgress, probeCatalog } from "./probe.js";
 import { CODE, UpstreamError, getJson } from "./http.js";
@@ -271,6 +271,7 @@ function createModelRuntime({
   let aggregateCatalog = [];
   let subscriptionEntries = [];
   let comboCatalog = [];
+  let autoFreeEntry = null;
   let extensionCatalog = [];
   let familyKeysById = /* @__PURE__ */ new Map();
   let freeCatalog = catalog;
@@ -291,6 +292,12 @@ function createModelRuntime({
       if (seen.has(entry.id)) continue;
       seen.add(entry.id);
       merged.push(entry);
+    }
+    autoFreeEntry = settings.get().autoFreeOnly === false ? null : buildAutoFreeEntry(freeCatalog, kiloCatalog);
+    if (autoFreeEntry !== null) {
+      merged.push(autoFreeEntry);
+      seen.add(autoFreeEntry.id);
+      candidates.push(autoFreeEntry);
     }
     const combos = normalizeCombos(settings.get().combos);
     comboCatalog = buildComboCatalog(combos, merged);
@@ -314,16 +321,26 @@ function createModelRuntime({
   const state = () => {
     const settingsSnapshot = settings.get();
     const visibility = buildModelVisibility(settingsSnapshot, familyKeysById);
+    const membership = computeMembership(catalog, availability.get(), settingsSnapshot, visibility);
     return {
       catalog,
-      membership: computeMembership(catalog, availability.get(), settingsSnapshot, visibility),
+      membership,
+      // The consolidated keyless lane's picker view (null = no consolidation).
+      picker: pickerMembership(membership, catalog, settingsSnapshot),
       settings: settingsSnapshot,
       visibility,
       attributionUserAgent,
       lane: laneRow(),
       routing: {
         quota: subscriptionRuntime?.routingQuota?.() ?? {},
-        usage: Object.fromEntries(catalog.map((row) => [row.id, stats.get().models?.[row.id]?.calls ?? 0]))
+        usage: Object.fromEntries(catalog.map((row) => [row.id, stats.get().models?.[row.id]?.calls ?? 0])),
+        // Per-model availability verdicts, consumed by the `auto` strategy of
+        // the consolidated "Our Auto Free" chain so it leads with a model this
+        // egress already answered and avoids one it already refused.
+        availability: Object.fromEntries(catalog.map((row) => [
+          row.id,
+          modelAvailability(row.id, availability.get(), Boolean(row.channel)).availability
+        ]))
       }
     };
   };
@@ -743,6 +760,23 @@ function computeMembership(catalog, availabilitySnapshot, settings, visibility) 
   if (region.length > 0) membership[ROUTE_REGION2] = region;
   return membership;
 }
+function pickerMembership(membership, catalog, settings) {
+  if (settings?.autoFreeOnly === false) return null;
+  const auto = catalog.find(isAutoFreeEntry);
+  if (auto === void 0 || !Object.values(membership ?? {}).some((ids) => ids.includes(auto.id))) return null;
+  const hidden = new Set(auto.combo);
+  const out = {};
+  let autoPlaced = false;
+  for (const [route, ids] of Object.entries(membership ?? {})) {
+    const kept = ids.filter((id) => !hidden.has(id) && id !== auto.id);
+    if (!autoPlaced && ids.some((id) => hidden.has(id) || id === auto.id)) {
+      kept.unshift(auto.id);
+      autoPlaced = true;
+    }
+    if (kept.length > 0) out[route] = kept;
+  }
+  return out;
+}
 
 // src/core/stats.js
 import { MIN_DECODE_MS } from "./store.js";
@@ -863,6 +897,7 @@ export {
   createRuntimeStores,
   foldForwardOutcome,
   fromOpenAiMessages,
+  pickerMembership,
   publicModelRows,
   routableModelIds
 };

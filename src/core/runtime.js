@@ -3,7 +3,7 @@ import path from 'node:path'
 import { FreeModelAdapter, ROUTE_MAIN, ROUTE_REGION } from '../adapter.js'
 import { buildCatalog, buildEacCatalog, buildKiloCatalog, catalogFamilyKeys, isEacEntry, isKiloEntry, parseListing, reviveKiloCatalog } from '../catalog.js'
 import { buildAggregateCatalog, isAggregateEntry } from '../aggregate.js'
-import { buildComboCatalog, isComboEntry, normalizeCombos, pruneRotation } from '../combos.js'
+import { buildAutoFreeEntry, buildComboCatalog, isAutoFreeEntry, isComboEntry, normalizeCombos, pruneRotation } from '../combos.js'
 import { JsonStore, SETTINGS_INITIAL, STATS_INITIAL, STATS_VERSION, buildModelVisibility, migrateStats, pruneDays, recordTurn, recordUsage, isModelHidden } from '../store.js'
 import { STATE, detectEgress, probeCatalog } from '../probe.js'
 import { CODE, UpstreamError, getJson } from '../http.js'
@@ -116,6 +116,8 @@ export function createModelRuntime({
   let subscriptionEntries = []
   /** The virtual rows a combo contributes; rebuilt last, after every real lane. */
   let comboCatalog = []
+  /** The consolidated "Our Auto Free" row over the two keyless lanes. */
+  let autoFreeEntry = null
   /** The extension lane: rows served by installed, enabled channel extensions. */
   let extensionCatalog = []
   /** The directory-confirmed full ids that may share a hidden-model family. */
@@ -155,6 +157,19 @@ export function createModelRuntime({
       seen.add(entry.id)
       merged.push(entry)
     }
+    // The two keyless lanes are consolidated into one "Our Auto Free" virtual
+    // row. The raw rows stay in the catalog (the adapter routes through their
+    // endpoints), but computeMembership hides them from the picker; only the
+    // single virtual row is advertised.
+    // The opt-out preserves the upstream picker exactly (no virtual row).
+    autoFreeEntry = settings.get().autoFreeOnly === false
+      ? null
+      : buildAutoFreeEntry(freeCatalog, kiloCatalog)
+    if (autoFreeEntry !== null) {
+      merged.push(autoFreeEntry)
+      seen.add(autoFreeEntry.id)
+      candidates.push(autoFreeEntry)
+    }
     const combos = normalizeCombos(settings.get().combos)
     comboCatalog = buildComboCatalog(combos, merged)
     pruneRotation(combos)
@@ -177,9 +192,12 @@ export function createModelRuntime({
   const state = () => {
     const settingsSnapshot = settings.get()
     const visibility = buildModelVisibility(settingsSnapshot, familyKeysById)
+    const membership = computeMembership(catalog, availability.get(), settingsSnapshot, visibility)
     return {
       catalog,
-      membership: computeMembership(catalog, availability.get(), settingsSnapshot, visibility),
+      membership,
+      // The consolidated keyless lane's picker view (null = no consolidation).
+      picker: pickerMembership(membership, catalog, settingsSnapshot),
       settings: settingsSnapshot,
       visibility,
       attributionUserAgent,
@@ -187,6 +205,12 @@ export function createModelRuntime({
       routing: {
         quota: subscriptionRuntime?.routingQuota?.() ?? {},
         usage: Object.fromEntries(catalog.map(row => [row.id, stats.get().models?.[row.id]?.calls ?? 0])),
+        // Per-model availability verdicts, consumed by the `auto` strategy of
+        // the consolidated "Our Auto Free" chain so it leads with a model this
+        // egress already answered and avoids one it already refused.
+        availability: Object.fromEntries(catalog.map(row => [
+          row.id, modelAvailability(row.id, availability.get(), Boolean(row.channel)).availability,
+        ])),
       },
     }
   }
@@ -640,4 +664,35 @@ export function computeMembership(catalog, availabilitySnapshot, settings, visib
   if (main.length > 0) membership[ROUTE_MAIN] = main
   if (region.length > 0) membership[ROUTE_REGION] = region
   return membership
+}
+
+/**
+ * The picker's own view of membership: this fork collapses only the two
+ * keyless lanes (anonymous free + Kilo) into one "Our Auto Free" row. Every
+ * other lane — EAC, aggregate, combos, subscriptions, account channels —
+ * stays exactly as `computeMembership` advertised it. The raw keyless rows
+ * remain in the catalog for routing and the forward gateway; they are just
+ * not offered as separate choices in the selector.
+ *
+ * Returns null when the consolidated entry is not present, meaning "use the
+ * full membership unchanged".
+ */
+export function pickerMembership(membership, catalog, settings) {
+  if (settings?.autoFreeOnly === false) return null
+  const auto = catalog.find(isAutoFreeEntry)
+  if (auto === undefined || !Object.values(membership ?? {}).some(ids => ids.includes(auto.id))) return null
+  const hidden = new Set(auto.combo)
+  const out = {}
+  let autoPlaced = false
+  for (const [route, ids] of Object.entries(membership ?? {})) {
+    const kept = ids.filter(id => !hidden.has(id) && id !== auto.id)
+    // Place the single auto row once, on the first route that carried any of
+    // its members (preferring main). It must never be advertised twice.
+    if (!autoPlaced && ids.some(id => hidden.has(id) || id === auto.id)) {
+      kept.unshift(auto.id)
+      autoPlaced = true
+    }
+    if (kept.length > 0) out[route] = kept
+  }
+  return out
 }

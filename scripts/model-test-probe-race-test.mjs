@@ -20,7 +20,7 @@ const { createRuntimeStores, createModelRuntime, computeMembership } = await imp
 const { modelAvailability } = await import('../src/model-test.js')
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ofm-probe-manual-order-'))
 const stores = createRuntimeStores({ dataDir, logger: { warn() {} } })
-stores.settings.update({ enabled: true, combos: [] })
+stores.settings.update({ enabled: true, autoFreeOnly: false, combos: [] })
 stores.catalogStore.update({ entries: [id] })
 const runtime = createModelRuntime({ ...stores, logger: { warn() {} } })
 const realNow = Date.now

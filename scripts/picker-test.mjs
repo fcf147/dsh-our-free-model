@@ -84,6 +84,9 @@ if (adapter === undefined) {
 /** The prefix handler the plugin mounted on the fake web server. */
 const api = () => routes.find(route => route.kind === 'prefix')?.handler
 await until(() => api() !== undefined, { what: 'the settings API route' })
+// This fork collapses the keyless lanes into one picker row by default; this
+// suite asserts the per-model picker behaviour, so opt out for its duration.
+await callRoute(api(), 'POST', '/api/our-free-model/settings', { autoFreeOnly: false })
 
 // Automatic probing is disabled by owner policy. This suite is about picker
 // reads, so it waits for the listing, then drives the one probe round it needs

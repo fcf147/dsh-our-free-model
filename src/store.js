@@ -170,6 +170,9 @@ export const SETTINGS_INITIAL = {
   autoUpdateExtensions: false,
   /** Show region-limited models in the picker as soon as they answer. */
   exposeRegionModels: true,
+  /** Collapse the anonymous free lane and Kilo free pool into one
+   *  "Our Auto Free" model in the picker. The raw rows stay routable. */
+  autoFreeOnly: true,
   /** Advertisement only: retain catalog entries and historical model resolution. */
   hiddenModelIds: [],
   hideFreeModels: false,
