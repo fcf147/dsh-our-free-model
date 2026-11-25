@@ -48,9 +48,23 @@ export const COMBO_STRATEGIES = ['fallback', 'round-robin', 'smart', 'usage', 'p
 export const AUTO_FREE_ID = `${COMBO_PREFIX}our-auto-free`
 export const AUTO_FREE_NAME = 'Our Auto Free'
 
+/** The same construction for the EAC (GitHub-authorized) lane. */
+export const AUTO_EAC_ID = `${COMBO_PREFIX}our-eac-free`
+export const AUTO_EAC_NAME = 'EAC Our Free Model'
+
 /** Is this catalog row the built-in auto router over the keyless lanes? */
 export function isAutoFreeEntry(entry) {
   return entry?.id === AUTO_FREE_ID && isComboEntry(entry)
+}
+
+/** Is this catalog row the built-in auto router over the EAC lane? */
+export function isAutoEacEntry(entry) {
+  return entry?.id === AUTO_EAC_ID && isComboEntry(entry)
+}
+
+/** Either of the fork's built-in consolidated lanes. */
+export function isAutoLaneEntry(entry) {
+  return entry?.autoLane === true && isComboEntry(entry)
 }
 
 /** Rotation cursors, keyed by combo id. In-memory on purpose (see the header). */
@@ -189,9 +203,25 @@ export function buildComboCatalog(combos, catalog) {
  * @returns {object|null} the virtual combo entry, or null when both lanes are empty
  */
 export function buildAutoFreeEntry(freeRows, kiloRows) {
+  return buildAutoEntry({
+    id: AUTO_FREE_ID, name: AUTO_FREE_NAME, kind: 'autoFree',
+    rows: [...(freeRows ?? []), ...(kiloRows ?? [])],
+  })
+}
+
+/** The single "EAC Our Free Model" row over the live EAC roster. */
+export function buildAutoEacEntry(eacRows) {
+  return buildAutoEntry({
+    id: AUTO_EAC_ID, name: AUTO_EAC_NAME, kind: 'autoEac',
+    rows: eacRows ?? [],
+  })
+}
+
+/** Shared constructor for a fork auto-lane virtual combo row. */
+function buildAutoEntry({ id, name, kind, rows }) {
   const members = []
   const seen = new Set()
-  for (const row of [...(freeRows ?? []), ...(kiloRows ?? [])]) {
+  for (const row of rows) {
     if (row === null || typeof row !== 'object' || isComboEntry(row)) continue
     if (typeof row.id !== 'string' || row.id === '' || seen.has(row.id)) continue
     seen.add(row.id)
@@ -199,14 +229,14 @@ export function buildAutoFreeEntry(freeRows, kiloRows) {
   }
   if (members.length === 0) return null
   return {
-    id: AUTO_FREE_ID,
-    name: AUTO_FREE_NAME,
+    id, name,
     channel: COMBO_CHANNEL,
     combo: members.map(member => member.id),
     strategy: 'auto',
     stickyLimit: 1,
     enabled: true,
-    autoFree: true,
+    autoLane: true,
+    [kind]: true,
     vision: members.every(member => member.vision === true),
     reasoning: members.some(member => member.reasoning === true),
     // Honest intersection, not union: a fallback must never be handed an image

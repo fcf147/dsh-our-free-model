@@ -14,8 +14,8 @@
  */
 import assert from 'node:assert/strict'
 import {
-  AUTO_FREE_ID, AUTO_FREE_NAME, buildAutoFreeEntry, comboChain,
-  isAutoFreeEntry,
+  AUTO_EAC_ID, AUTO_EAC_NAME, AUTO_FREE_ID, AUTO_FREE_NAME,
+  buildAutoEacEntry, buildAutoFreeEntry, comboChain, isAutoEacEntry, isAutoFreeEntry,
 } from '../src/combos.js'
 import { computeMembership, pickerMembership } from '../src/core/runtime.js'
 import { ROUTE_MAIN, ROUTE_REGION } from '../src/adapter.js'
@@ -106,6 +106,36 @@ check('auto strategy leads with measured-good links and benches refused ones', (
   const order = comboChain(auto, catalog, routing).map(row => row.id)
   assert.equal(order[order.length - 1], 'a', 'a refused model goes last')
   assert.equal(order[0], 'b', 'a measured-good model goes first')
+})
+
+check('EAC lane collapses into one auto-routed EAC entry', () => {
+  const eac = id => ({ id, name: `EAC ${id}`, channel: 'eac', contextWindow: 131072, maxOutput: 32768, vision: false, reasoning: true })
+  const eacRows = [eac('deepseek-ai/deepseek-v4.1-flash'), eac('zai-org/glm-5.3-flash')]
+  const entry = buildAutoEacEntry(eacRows)
+  assert.ok(isAutoEacEntry(entry))
+  assert.equal(entry.id, AUTO_EAC_ID)
+  assert.equal(entry.name, AUTO_EAC_NAME)
+  assert.equal(entry.strategy, 'auto')
+  assert.equal(entry.autoEac, true)
+  assert.deepEqual(entry.combo, eacRows.map(row => row.id))
+})
+
+check('the picker hides raw EAC rows behind the single EAC auto entry', () => {
+  const eac = id => ({ id, name: `EAC ${id}`, channel: 'eac', contextWindow: 131072, maxOutput: 32768, vision: false, reasoning: true })
+  const eacRows = [eac('deepseek-ai/deepseek-v4.1-flash'), eac('zai-org/glm-5.3-flash')]
+  const autoEac = buildAutoEacEntry(eacRows)
+  const kilo = [kiloRow('kilo-auto/free')]
+  const autoFree = buildAutoFreeEntry([], kilo)
+  const catalog = [...eacRows, ...kilo, autoFree, autoEac]
+  const membership = computeMembership(catalog, { results: {}, manualResults: {} }, {}, null)
+  const picker = pickerMembership(membership, catalog, {})
+  assert.ok(picker[ROUTE_MAIN].includes(AUTO_FREE_ID))
+  assert.ok(picker[ROUTE_MAIN].includes(AUTO_EAC_ID))
+  for (const id of [...eacRows.map(r => r.id), 'kilo-auto/free']) {
+    assert.ok(!Object.values(picker).some(ids => ids.includes(id)), `${id} must be hidden`)
+  }
+  // The full routing membership keeps every raw row.
+  assert.ok(membership[ROUTE_MAIN].includes(eacRows[0].id))
 })
 
 check('auto strategy still fails over when the first candidate errors', () => {

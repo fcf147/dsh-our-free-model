@@ -3,7 +3,7 @@ import path from 'node:path'
 import { FreeModelAdapter, ROUTE_MAIN, ROUTE_REGION } from '../adapter.js'
 import { buildCatalog, buildEacCatalog, buildKiloCatalog, catalogFamilyKeys, isEacEntry, isKiloEntry, parseListing, reviveKiloCatalog } from '../catalog.js'
 import { buildAggregateCatalog, isAggregateEntry } from '../aggregate.js'
-import { buildAutoFreeEntry, buildComboCatalog, isAutoFreeEntry, isComboEntry, normalizeCombos, pruneRotation } from '../combos.js'
+import { buildAutoEacEntry, buildAutoFreeEntry, buildComboCatalog, isAutoLaneEntry, isComboEntry, normalizeCombos, pruneRotation } from '../combos.js'
 import { JsonStore, SETTINGS_INITIAL, STATS_INITIAL, STATS_VERSION, buildModelVisibility, migrateStats, pruneDays, recordTurn, recordUsage, isModelHidden } from '../store.js'
 import { STATE, detectEgress, probeCatalog } from '../probe.js'
 import { CODE, UpstreamError, getJson } from '../http.js'
@@ -118,6 +118,8 @@ export function createModelRuntime({
   let comboCatalog = []
   /** The consolidated "Our Auto Free" row over the two keyless lanes. */
   let autoFreeEntry = null
+  /** The consolidated "EAC Our Free Model" row over the EAC lane. */
+  let autoEacEntry = null
   /** The extension lane: rows served by installed, enabled channel extensions. */
   let extensionCatalog = []
   /** The directory-confirmed full ids that may share a hidden-model family. */
@@ -169,6 +171,16 @@ export function createModelRuntime({
       merged.push(autoFreeEntry)
       seen.add(autoFreeEntry.id)
       candidates.push(autoFreeEntry)
+    }
+    // Likewise the EAC lane: one "EAC Our Free Model" row auto-routing over
+    // every EAC model the GitHub-authorized roster currently serves.
+    autoEacEntry = settings.get().autoEacOnly === false
+      ? null
+      : buildAutoEacEntry(sealedCatalog)
+    if (autoEacEntry !== null) {
+      merged.push(autoEacEntry)
+      seen.add(autoEacEntry.id)
+      candidates.push(autoEacEntry)
     }
     const combos = normalizeCombos(settings.get().combos)
     comboCatalog = buildComboCatalog(combos, merged)
@@ -678,19 +690,27 @@ export function computeMembership(catalog, availabilitySnapshot, settings, visib
  * full membership unchanged".
  */
 export function pickerMembership(membership, catalog, settings) {
-  if (settings?.autoFreeOnly === false) return null
-  const auto = catalog.find(isAutoFreeEntry)
-  if (auto === undefined || !Object.values(membership ?? {}).some(ids => ids.includes(auto.id))) return null
-  const hidden = new Set(auto.combo)
+  // Both fork consolidations can be independently opted out.
+  const autos = catalog.filter(isAutoLaneEntry).filter(entry => {
+    if (entry.autoFree === true) return settings?.autoFreeOnly !== false
+    if (entry.autoEac === true) return settings?.autoEacOnly !== false
+    return false
+  })
+  if (autos.length === 0) return null
+  const hidden = new Set(autos.flatMap(entry => entry.combo))
+  const autoIds = new Set(autos.map(entry => entry.id))
   const out = {}
-  let autoPlaced = false
+  const placed = new Set()
   for (const [route, ids] of Object.entries(membership ?? {})) {
-    const kept = ids.filter(id => !hidden.has(id) && id !== auto.id)
-    // Place the single auto row once, on the first route that carried any of
-    // its members (preferring main). It must never be advertised twice.
-    if (!autoPlaced && ids.some(id => hidden.has(id) || id === auto.id)) {
-      kept.unshift(auto.id)
-      autoPlaced = true
+    const kept = ids.filter(id => !hidden.has(id) && !autoIds.has(id))
+    // Place each consolidated row once, on the first route that carried any
+    // of its members (preferring main). Never advertise a row twice.
+    for (const auto of autos) {
+      if (placed.has(auto.id)) continue
+      if (ids.some(id => auto.combo.includes(id) || id === auto.id)) {
+        kept.unshift(auto.id)
+        placed.add(auto.id)
+      }
     }
     if (kept.length > 0) out[route] = kept
   }

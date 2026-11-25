@@ -1066,6 +1066,10 @@ function describe(entry, settings) {
   // A chain's own detail line: which models it will try, in order. Without it a
   // combo in the picker looks like one more model with no endpoint behind it.
   if (isComboEntry(entry)) {
+    if (entry.autoEac === true) {
+      parts.push(`auto-routes across ${entry.combo.length} EAC models, refreshed with the authorized roster`)
+      return parts.join(' · ')
+    }
     if (entry.autoFree === true) {
       parts.push(`auto-routes across ${entry.combo.length} free models, refreshed with the upstream rosters`)
       return parts.join(' · ')

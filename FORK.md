@@ -2,8 +2,15 @@
 
 This fork changes one thing about the upstream `dsh-our-free-model` plugin:
 
-**The two keyless lanes — the anonymous OpenCode free lane and Kilo's free
-pool — are collapsed into a single picker model named “Our Auto Free”.**
+**Each lane is collapsed into a single auto-routing picker model:**
+
+- The anonymous OpenCode free lane + Kilo free pool → **“Our Auto Free”**
+- The maintainer-provided EAC free lane (GitHub-authorized) → **“EAC Our Free Model”**
+
+Both virtual rows are rebuilt from their live rosters on every catalog merge;
+models added/withdrawn upstream join/leave automatically. All other lanes
+(aggregate/self-keyed providers, user combos, subscriptions, account channels)
+are unchanged.
 
 ## What you see
 
@@ -37,20 +44,24 @@ over **all currently free models from both lanes**.
 
 ## Settings
 
-**设置 → Our Free Model → 插件设置 → 合并为单个 Our Auto Free** (default on)
-controls the consolidation. Turning it off restores the upstream picker with
-each free/Kilo model listed individually. The underlying models stay routable
-either way, so existing sessions with a saved model id keep working.
+**设置 → Our Free Model → 插件设置** has two switches (both default on):
+
+- **合并为单个 Our Auto Free** — collapse the keyless lanes
+- **合并为单个 EAC Our Free Model** — collapse the EAC lane
+
+Turning either off restores the upstream picker for that lane with each model
+listed individually. The underlying models stay routable either way, so
+existing sessions with a saved model id keep working.
 
 ## Implementation pointers
 
 | Concern | File |
 | --- | --- |
-| Virtual entry + `auto` strategy | `src/combos.js` (`buildAutoFreeEntry`, `comboChain`) |
+| Virtual entries + `auto` strategy | `src/combos.js` (`buildAutoFreeEntry`, `buildAutoEacEntry`, `comboChain`) |
 | Catalog rebuild on merge | `src/core/runtime.js` (`rebuildCatalog`) |
 | Picker-only filtering | `src/core/runtime.js` (`pickerMembership`), `src/adapter.js` (`listModels`) |
 | Routing availability signal | `src/core/runtime.js` (`state().routing.availability`) |
-| Settings toggle | `src/store.js`, `index.js`, `client.js` |
+| Settings toggles | `src/store.js`, `index.js`, `client.js` |
 | Tests | `scripts/auto-free-test.mjs` |
 
 ## Test status

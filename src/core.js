@@ -191,7 +191,7 @@ import path from "node:path";
 import { FreeModelAdapter, ROUTE_MAIN as ROUTE_MAIN2, ROUTE_REGION as ROUTE_REGION2 } from "./adapter.js";
 import { buildCatalog, buildEacCatalog, buildKiloCatalog, catalogFamilyKeys, isEacEntry, isKiloEntry, parseListing, reviveKiloCatalog } from "./catalog.js";
 import { buildAggregateCatalog, isAggregateEntry } from "./aggregate.js";
-import { buildAutoFreeEntry, buildComboCatalog, isAutoFreeEntry, isComboEntry, normalizeCombos, pruneRotation } from "./combos.js";
+import { buildAutoEacEntry, buildAutoFreeEntry, buildComboCatalog, isAutoLaneEntry, isComboEntry, normalizeCombos, pruneRotation } from "./combos.js";
 import { JsonStore, SETTINGS_INITIAL, STATS_INITIAL, STATS_VERSION, buildModelVisibility, migrateStats, pruneDays, recordTurn, recordUsage, isModelHidden } from "./store.js";
 import { STATE, detectEgress, probeCatalog } from "./probe.js";
 import { CODE, UpstreamError, getJson } from "./http.js";
@@ -272,6 +272,7 @@ function createModelRuntime({
   let subscriptionEntries = [];
   let comboCatalog = [];
   let autoFreeEntry = null;
+  let autoEacEntry = null;
   let extensionCatalog = [];
   let familyKeysById = /* @__PURE__ */ new Map();
   let freeCatalog = catalog;
@@ -298,6 +299,12 @@ function createModelRuntime({
       merged.push(autoFreeEntry);
       seen.add(autoFreeEntry.id);
       candidates.push(autoFreeEntry);
+    }
+    autoEacEntry = settings.get().autoEacOnly === false ? null : buildAutoEacEntry(sealedCatalog);
+    if (autoEacEntry !== null) {
+      merged.push(autoEacEntry);
+      seen.add(autoEacEntry.id);
+      candidates.push(autoEacEntry);
     }
     const combos = normalizeCombos(settings.get().combos);
     comboCatalog = buildComboCatalog(combos, merged);
@@ -761,17 +768,24 @@ function computeMembership(catalog, availabilitySnapshot, settings, visibility) 
   return membership;
 }
 function pickerMembership(membership, catalog, settings) {
-  if (settings?.autoFreeOnly === false) return null;
-  const auto = catalog.find(isAutoFreeEntry);
-  if (auto === void 0 || !Object.values(membership ?? {}).some((ids) => ids.includes(auto.id))) return null;
-  const hidden = new Set(auto.combo);
+  const autos = catalog.filter(isAutoLaneEntry).filter((entry) => {
+    if (entry.autoFree === true) return settings?.autoFreeOnly !== false;
+    if (entry.autoEac === true) return settings?.autoEacOnly !== false;
+    return false;
+  });
+  if (autos.length === 0) return null;
+  const hidden = new Set(autos.flatMap((entry) => entry.combo));
+  const autoIds = new Set(autos.map((entry) => entry.id));
   const out = {};
-  let autoPlaced = false;
+  const placed = /* @__PURE__ */ new Set();
   for (const [route, ids] of Object.entries(membership ?? {})) {
-    const kept = ids.filter((id) => !hidden.has(id) && id !== auto.id);
-    if (!autoPlaced && ids.some((id) => hidden.has(id) || id === auto.id)) {
-      kept.unshift(auto.id);
-      autoPlaced = true;
+    const kept = ids.filter((id) => !hidden.has(id) && !autoIds.has(id));
+    for (const auto of autos) {
+      if (placed.has(auto.id)) continue;
+      if (ids.some((id) => auto.combo.includes(id) || id === auto.id)) {
+        kept.unshift(auto.id);
+        placed.add(auto.id);
+      }
     }
     if (kept.length > 0) out[route] = kept;
   }

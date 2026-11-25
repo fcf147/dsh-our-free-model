@@ -270,7 +270,7 @@ export async function startStandalone({
     const savedLanPort = settings.get().standaloneLanPort
     // The standalone gateway keeps the upstream per-model picker; the
     // consolidated "Our Auto Free" row belongs to the DSH plugin selector.
-    settings.update({ autoFreeOnly: false })
+    settings.update({ autoFreeOnly: false, autoEacOnly: false })
     settings.update({
       forwardKey: key,
       managementKey: typeof settings.get().managementKey === 'string' && settings.get().managementKey !== ''

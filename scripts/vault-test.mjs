@@ -893,6 +893,9 @@ const { createGatewayServer, resetAnalytics, poolProbe } = await import('../work
     const api = () => routes.find(route => route.kind === 'prefix')?.handler
     try {
       await until(() => api() !== undefined, { what: 'the settings API route', timeoutMs: 8000 })
+      // This suite asserts individual EAC rows in the picker; opt out of this
+      // fork's "EAC Our Free Model" consolidation.
+      await callRoute(api(), 'POST', '/api/our-free-model/settings', { autoEacOnly: false })
       await until(() => {
         const adapter = ctx.__captured.adapters[0]?.adapter
         return adapter !== undefined && adapter.listModels !== undefined
