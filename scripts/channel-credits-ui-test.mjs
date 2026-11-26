@@ -62,15 +62,14 @@ export async function verifyChannelCreditsUi() {
     subscribe()
     return { calls, errors, cells, button, text, cleanup, events }
   }
-  const claimable = new Set(['lobsterai', 'qoder', 'qodercn', 'trae', 'loomy', 'minimax', 'zcode'])
-  for (const provider of [...claimable, 'cline', 'raccoon', 'gemini']) {
+  const claimable = new Set(['lobsterai', 'trae', 'loomy', 'minimax', 'buddy', 'codearts'])
+  for (const provider of [...claimable, 'cline', 'gemini', 'buddy', 'codearts']) {
     const app = mount(provider, async () => ({ accounts: [] }))
     await settle()
     assert.equal(app.calls[0].method, 'credits.balances', `${provider} 必须查询已有后端余额能力`)
     assert.equal(app.calls[0].payload.provider, provider)
     assert.ok(app.button('刷新余额'))
     assert.equal(Boolean(app.button('一键领取')), claimable.has(provider), `${provider} 必须单独判断签到能力`)
-    if (provider === 'zcode') assert.ok(app.text().includes('剩余 Token'))
     if (provider === 'cline') assert.ok(app.text().includes('USD'))
     if (provider === 'gemini') assert.ok(app.text().includes('剩余配额'))
     app.cleanup()
@@ -121,7 +120,7 @@ export async function verifyChannelCreditsUi() {
   app.cleanup()
 
   let resolveOld, resolveNew, readCount = 0
-  const race = mount('qoder', async method => {
+  const race = mount('lobsterai', async method => {
     if (method === 'credits.balances') {
       readCount++
       return new Promise(resolve => { if (readCount === 1) resolveOld = resolve; else resolveNew = resolve })
@@ -149,7 +148,7 @@ export async function verifyChannelCreditsUi() {
   race.cleanup()
 
   let resolveUnmount
-  const unmounted = mount('qoder', async () => new Promise(resolve => { resolveUnmount = resolve }))
+  const unmounted = mount('lobsterai', async () => new Promise(resolve => { resolveUnmount = resolve }))
   unmounted.cleanup()
   resolveUnmount({ accounts: [{ accountId: 'one', balance: { total: 999 } }] })
   await settle()

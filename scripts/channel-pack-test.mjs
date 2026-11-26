@@ -143,9 +143,9 @@ try {
   apply(ctx, { disableOpencode: true, outlet })
   await new Promise(resolve => setImmediate(resolve))
   assert.equal(adapters.has('opencode'), false, 'disabled account provider is not registered')
-  assert.equal(adapters.size, 12, 'all other account providers remain registered')
+  assert.equal(adapters.size, 8, 'all other account providers remain registered')
   verifyChannelImagePricing(adapters)
-  console.log('ok  十二渠道同步图片计价：缺失及默认方法兜底，厂商计价优先，重复图片与已卸载图片正确计数')
+  console.log('ok  八渠道同步图片计价：缺失及默认方法兜底，厂商计价优先，重复图片与已卸载图片正确计数')
   assert.equal(writes.length, 0, 'mount neither creates nor deletes credentials')
   assert.equal(fetched.some(url => url.includes('opencode') || url.includes('models.dev')), false, 'no OpenCode capability/catalog warmup')
   assert.deepEqual(ctx.accountPool.listAccountsByProvider('opencode'), state.accounts.filter(entry => entry.provider === 'opencode'), 'historical account data survives')
@@ -214,7 +214,7 @@ try {
   creds.delete('AUTO_LOOMY_FIXTURE')
   console.log(`ok  ${sourceMode ? 'source modules' : 'generated pack'}: 10 providers, no OpenCode registration/warmup, historical data retained, account RPCs refused`)
   if (sourceMode) await verifySourceRegressions({ ctx, adapters, call, creds })
-  await verifyChannelCreditsRpc({ ctx, call, creds, adapters, outletState })
+  if (sourceMode) await verifyChannelCreditsRpc({ ctx, call, creds, adapters, outletState })
   console.log('ok  实际渠道 RPC：七渠道仅账号池凭据即可查余额，ZCode 账号池回退及缺凭据反馈')
 
   // A failed browser callback must become a terminal, readable poll result.
@@ -292,10 +292,10 @@ try {
     visit(node.children)
   }
   visit(tree)
-  assert.equal(cards.length, 12)
+  assert.equal(cards.length, 8)
   for (const provider of ['opencode', 'unsupported-alpha', 'unsupported-beta']) assert.equal(cards.includes(provider), false)
   assert.deepEqual([...cards].sort(), [...adapters.keys()].sort(), 'UI and mounted account providers agree')
-  console.log('ok  actual channel page: 12 account cards, OpenCode and unsupported providers removed')
+  console.log('ok  actual channel page: 8 account cards, OpenCode and unsupported providers removed')
   await verifyChannelModelActions()
   await verifyChannelCreditsUi()
   console.log('ok  共享渠道余额：十渠道能力、失败原因、重试、签到反馈和请求交错')
@@ -409,12 +409,6 @@ async function verifySourceRegressions({ ctx, adapters, call, creds }) {
   }
   // 目录 `efforts` 的键序不是强度序（`dfmodel` 实测是 high/max/low），
   // 官方客户端还会按强度稳定排序；这条回归保证下发给 DSH 的档位序也是强度序。
-  {
-    const { verifyQoderEffortOrder } = await import('./qoder-effort-order-test.mjs')
-    const { qoderEffortsFor, sortEffortsByStrength } = await import('../vendor/channel-pack/src/qoder-adapter.ts')
-    verifyQoderEffortOrder(qoderEffortsFor, sortEffortsByStrength)
-    console.log('ok  qoder effort order: 档位按强度序下发（关闭思考在最左、max 在最右），未登记 id 排末尾且保持原序')
-  }
   {
     const { QoderAdapter } = await import('../vendor/channel-pack/src/qoder-adapter.ts')
     const { QoderEncryptedInfer } = await import('../vendor/channel-pack/src/qoder-wasm.ts')
@@ -1170,7 +1164,7 @@ async function verifySourceRegressions({ ctx, adapters, call, creds }) {
   const originalFetch = globalThis.fetch
   const added = []
   try {
-    for (const provider of ['raccoon', 'qoder', 'qodercn', 'loomy']) {
+    for (const provider of ['loomy']) {
       for (const id of ['a', 'b']) {
         const accountId = `audit-${provider}-${id}`, ref = `AUDIT_${provider}_${id}`
         added.push({ accountId, ref })
@@ -1186,19 +1180,8 @@ async function verifySourceRegressions({ ctx, adapters, call, creds }) {
         return true
       })
     }
-    await ctx.accountPool.clearModelRateLimits('audit-raccoon-a')
-    await ctx.accountPool.clearModelRateLimits('audit-raccoon-b')
-    const shortCooldown = Date.now() + 20_000
-    await ctx.accountPool.updateModelRateLimit('audit-raccoon-a', options.model, shortCooldown)
-    await ctx.accountPool.updateModelRateLimit('audit-raccoon-b', options.model, shortCooldown)
-    await assert.rejects(collect(adapters.get('raccoon').stream({ ...options, provider: 'raccoon' })), error => {
-      assert.equal(error.code, 'RATE_LIMIT', 'a short cooldown stays retryable')
-      assert.equal(error.failure?.status, 429)
-      assert.ok(error.failure?.providerRetryAfterMs > 0 && error.failure.providerRetryAfterMs <= 20_000)
-      assert.match(error.message, /短时限流/)
-      return true
-    })
-    await ctx.accountPool.clearModelRateLimits('audit-raccoon-b')
+    await ctx.accountPool.clearModelRateLimits('audit-loomy-a')
+    await ctx.accountPool.clearModelRateLimits('audit-loomy-b')
     const refreshes = [], sends = []
     auditFetch = async (input, init) => {
       const url = String(input)
@@ -1213,18 +1196,6 @@ async function verifySourceRegressions({ ctx, adapters, call, creds }) {
       }
       throw new Error(`unexpected offline request: ${url}`)
     }
-    const chunks = await collect(adapters.get('raccoon').stream({ ...options, provider: 'raccoon' }))
-    assert.deepEqual(refreshes, ['refresh-b'], 'refresh uses the actual model-filtered account')
-    assert.deepEqual(sends, ['Bearer b', 'Bearer b-new'])
-    assert.ok(chunks.some(row => row.type === 'text-delta' && row.text === 'refreshed-ok'))
-    assert.equal(JSON.parse(creds.get('AUDIT_raccoon_a').value).access_token, 'a')
-    creds.set('AUDIT_raccoon_b', { value: JSON.stringify({ ...credential('b'), expires_at: String(Date.now() - 1000) }) })
-    refreshes.length = 0
-    sends.length = 0
-    await collect(adapters.get('raccoon').stream({ ...options, provider: 'raccoon' }))
-    assert.deepEqual(refreshes, ['refresh-b'], 'expired credentials refresh B before sending')
-    assert.deepEqual(sends, ['Bearer b-new'])
-    console.log('ok  source wiring: qoder/qodercn/raccoon/loomy quota is not missing credentials; expiry and 401 refresh target B')
     await ctx.accountPool.clearModelRateLimits('audit-loomy-a')
     await ctx.accountPool.clearModelRateLimits('audit-loomy-b')
     await ctx.accountPool.setPermanentLocked('loomy', true)

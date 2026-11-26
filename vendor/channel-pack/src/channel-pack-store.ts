@@ -342,15 +342,11 @@ const REF_PREFIX_TO_PROVIDER: ReadonlyArray<readonly [string, string]> = [
   ['CODEARTS', 'codearts'],
   ['BUDDY', 'buddy'],
   ['LOBSTERAI', 'lobsterai'],
-  ['QODER', 'qoder'],
-  ['QODERCN', 'qodercn'],
   ['TRAE', 'trae'],
   ['CLINE', 'cline'],
   ['LOOMY', 'loomy'],
-  ['RACCOON', 'raccoon'],
   // ⚠️ 第 12 个 provider（上游 2026-10-02 合并）—— 曾漏加，见上方注释 ②。
   ['MINIMAX', 'minimax'],
-  ['ZCODE', 'zcode'],
   // ⚠️ 第 13 个 provider（opencode，2026-10-01）—— 与上面 minimax 同款坑：
   // 漏加会让「恢复备份」认不出 opencode 账号（见上方注释 ②）。
   ['OPENCODE', 'opencode'],

@@ -20,12 +20,15 @@
  * bare "workbuddy" / "codebuddy" spellings stay available.
  */
 
-const DENIED_IDS = new Set(['workbuddy-ai'])
-// Only the international build is refused. `workbuddy[\s_-]*ai` covers
-// "workbuddy-ai", "workbuddy ai" and "workbuddy_ai" without swallowing the
-// bare "workbuddy" / "codebuddy" names that this build does offer.
-const DENIED_TEXT = /workbuddy[\s_-]*ai/i
-export const POLICY_REFUSED = 'WorkBuddy international (workbuddy-ai) is not offered by this build'
+const DENIED_IDS = new Set(['workbuddy-ai', 'qoder', 'qodercn', 'raccoon', 'zcode'])
+// Refused channels: WorkBuddy international plus the four channels this fork
+// removed after upstream stopped offering their free daily check-in (Qoder,
+// Qoder CN, Raccoon, ZCode). `workbuddy[\s_-]*ai` covers "workbuddy-ai",
+// "workbuddy ai" and "workbuddy_ai" without swallowing the bare "workbuddy" /
+// "codebuddy" names this build does offer. Longer aliases come first so the
+// redactor never leaves a fragment behind (qodercn before qoder).
+const DENIED_TEXT = /(?:workbuddy[\s_-]*ai|qodercn|qoder|raccoon|zcode)/i
+export const POLICY_REFUSED = 'These channels are not offered by this build'
 
 /**
  * Whether an account channel is excluded from this build. Both the embedded

@@ -28,15 +28,11 @@ import { isSupportedProvider } from './channel-pack-store.js'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { createUserMessage, LlmError } from '@deepseek-ai/dsh-llm'
 import { LobsteraiAdapter } from './lobsterai-adapter.js'
-import { QoderAdapter } from './qoder-adapter.js'
 import { ClineAdapter } from './cline-adapter.js'
-import { ZcodeAdapter } from './zcode-adapter.js'
 import { TraeAdapter } from './trae-adapter.js'
 import { isRateLimited, parseRateLimitError } from './rate-limit.js'
 import { lobsteraiProductById } from './lobsterai-product.js'
-import { qoderProductById } from './qoder-product.js'
 import { clineProductById } from './cline-product.js'
-import { zcodeProductById } from './zcode-product.js'
 import { GeminiAdapter } from './gemini-adapter.js'
 import { LoomyAdapter } from './loomy-adapter.js'
 // Restored channels (WorkBuddy China / Huawei Cloud): the probe must use the
@@ -49,9 +45,7 @@ import type { CodeArtsCredential } from './types.js'
 import { GEMINI, GEMINI_DEFAULT_PROJECT, GEMINI_SESSION_LANE_SMOKE } from './gemini.js'
 import { LOOMY } from './loomy-product.js'
 import type { LobsteraiCredential } from './lobsterai.js'
-import type { QoderCredential } from './qoder.js'
 import type { ClineCredential } from './cline.js'
-import type { ZcodeCredential } from './zcode.js'
 import type { TraeCredential } from './trae.js'
 import type { GeminiCredential } from './gemini.js'
 import type { LoomyCredential } from './loomy.js'
@@ -77,9 +71,7 @@ const TRAE_PROVIDER_ID = 'trae'
  */
 type ProbeCredential =
   | LobsteraiCredential
-  | QoderCredential
   | ClineCredential
-  | ZcodeCredential
   | TraeCredential
   | GeminiCredential
 
@@ -226,14 +218,10 @@ async function probeWithAdapter(
   // 取不到 modelId 时根本不构造适配器）。新增 provider 时务必同步本分支，
   // 并补 `tests/unit/account-probe-adapter.spec.ts` 的对应用例。
   const lobsteraiProduct = lobsteraiProductById(entry.provider)
-  const qoderProduct = qoderProductById(entry.provider)
   const clineProduct = clineProductById(entry.provider)
-  const zcodeProduct = zcodeProductById(entry.provider)
   let adapter:
     | LobsteraiAdapter
-    | QoderAdapter
     | ClineAdapter
-    | ZcodeAdapter
     | TraeAdapter
     | GeminiAdapter
     | LoomyAdapter
@@ -263,17 +251,6 @@ async function probeWithAdapter(
       refresh: async () => {},
       product: lobsteraiProduct,
     })
-  } else if (qoderProduct !== undefined) {
-    // Qoder 国际版与中国版**共用同一个适配器类**，差异全在 product 配置里
-    // （区域端点、client_id、模型表）。探测只发一次最小纯文本请求，不涉及
-    // 工具/图片，故除了 product 之外无需注入其它钩子；`uid` 由凭据自身携带
-    // （旧凭据缺 uid 时适配器会明确报错，而不是发出必然失败的请求）。
-    adapter = new QoderAdapter({
-      credentialRef: ref,
-      resolveCredential: async () => credential as QoderCredential,
-      refresh: async () => {},
-      product: qoderProduct,
-    })
   } else if (clineProduct !== undefined) {
     adapter = new ClineAdapter({
       credentialRef: ref,
@@ -281,37 +258,9 @@ async function probeWithAdapter(
       refresh: async () => {},
       product: clineProduct,
     })
-  } else if (zcodeProduct !== undefined) {
-    // ZCode 的免费额度通道（`/zcode-plan/anthropic`）**按需**要 captcha：
-    // 默认先不带验证头探一次，被 `3007` 拒才产出（需要验证时复用同一个 param
-    // 必再得 `3007`）。
-    // ⇒ 探测路径若上游当下不要验证，**不会**拉起浏览器；要验证才拉。
-    //
-    // ⚠️ 已知取舍：探测路径**没有** `mintCaptcha` 透传通道（`ProbeDeps` 里没有
-    // 这一项），故**一旦上游索要验证**，这里的适配器就**自建**一个常驻浏览器
-    // （上游不要验证时压根不 mint，也就不会拉）。若宿主里已有 `index.ts`
-    // 注入的那台（`zcode.mintCaptcha`），短时会并存两台（约 200MB/台）。
-
-    // （UTC+8 当日 24:00）会一直清不掉。
-    // 后续若要消除这层浪费，应给 `ProbeDeps` 加一条 `mintCaptcha` 透传，
-    // 与 `index.ts` 的 `zcode.mintCaptcha` 共用同一台常驻浏览器。
-    adapter = new ZcodeAdapter({
-      credentialRef: ref,
-      resolveCredential: async () => credential as ZcodeCredential,
-      refresh: async () => {},
-      product: zcodeProduct,
-    })
   } else if (entry.provider === LOOMY.id) {
-    // Loomy（讯飞）→ LoomyAdapter。
-    //
-    // 它此前**没有分支**，于是「测试」必然落到 else 抛
-    // `Unsupported probe adapter: loomy`，而客户端又把原因读成空串，用户看到的
-    // 是一句「测试失败：」后面什么都没有（#681）。
-    //
-    // 探测场景下 `accountPool` / `fetchRemoteModels` 都可缺省：`loadModels()`
-    // 会退回 `product.fallbackModels`，`providerCatalogVisible` 在
-    // `accountPool === undefined` 时直接返回 true。`refresh` 同样置空 ——
-    // Loomy 没有 refresh 端点，凭据真过期就让它以 AUTH 失败如实上报。
+    // Loomy（讯飞）→ LoomyAdapter。探测不传 accountPool / fetchRemoteModels，
+    // refresh 置空：凭据真过期就以 AUTH 失败如实上报。
     adapter = new LoomyAdapter({
       credentialRef: ref,
       resolveCredential: async () => credential as LoomyCredential,

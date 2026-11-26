@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 /** 使用实际已打包 RPC，只提供账号池 ref，禁止真实网络与旧单凭据回退。 */
 export async function verifyChannelCreditsRpc({ ctx, call, creds, adapters, outletState }) {
   const originalFetch = globalThis.fetch
-  const providers = ['qoder', 'qodercn', 'loomy', 'minimax', 'lobsterai', 'zcode', 'gemini']
+  const providers = ['loomy', 'minimax', 'lobsterai', 'gemini']
   let quotaRequests = 0, quotaFailed = true
   const originalResolve = ctx.credentials.resolve
   const resolvedRefs = []
@@ -45,17 +45,15 @@ export async function verifyChannelCreditsRpc({ ctx, call, creds, adapters, outl
       } else throw new Error(`未预期的替身端点：${pathname}`)
       return Response.json(body)
     }
-    for (const provider of providers.filter(id => id !== 'zcode' && id !== 'gemini')) {
+    for (const provider of providers.filter(id => id !== 'gemini')) {
       resolvedRefs.length = 0
       const result = await call('credits.balances', { provider })
       assert.equal(result.ok, true)
       assert.equal(result.value.accounts[0].balance?.total, 123, `${provider} 的账号池凭据应能查询余额`)
       assert.ok(resolvedRefs.includes(`FIXTURE_CREDITS_${provider.toUpperCase()}`))
     }
-    assert.equal((await ctx.zcodeAuth.current()).zcode_jwt, 'fixture-credits-jwt')
-    assert.equal((await ctx.zcodeAuth.status()).configured, true)
-    creds.delete('FIXTURE_CREDITS_QODER')
-    const missing = await call('credits.balances', { provider: 'qoder' })
+    creds.delete('FIXTURE_CREDITS_LOOMY')
+    const missing = await call('credits.balances', { provider: 'loomy' })
     assert.equal(missing.value.accounts[0].balance, null)
     assert.equal(missing.value.accounts[0].error, '凭据未配置', '缺失凭据必须返回原因，不能伪造零余额')
     const unavailableQuota = await call('credits.balances', { provider: 'gemini' })
@@ -69,33 +67,6 @@ export async function verifyChannelCreditsRpc({ ctx, call, creds, adapters, outl
     assert.equal(freshQuota.value.accounts[0].balance.total, 60)
     await verifyGeminiQuotaUsesChannelFetcher({ call, outletState })
     await verifyRefreshDispatch({ ctx, call })
-    for (const provider of ['qoder', 'qodercn']) {
-      const service = ctx[`${provider}Auth`], saved = service.refreshAccountCredential, calls = []
-      const ref = `FIXTURE_CREDITS_${provider.toUpperCase()}`
-      // 默认账号之外的 B 必须由实际注册接线按 id 刷新，不能重新选默认 ref。
-      const otherId = `fixture-auth-${provider}-b`, otherRef = `FIXTURE_AUTH_${provider.toUpperCase()}_B`
-      try {
-        creds.set(otherRef, { value: '{"access_token":"fixture-b"}' })
-        await ctx.accountPool.addAccount({ id: otherId, provider, nickname: 'B', credentialRef: otherRef, enabled: true, refreshable: true, createdAt: 1 })
-        // qoder 的缺凭据测试刚删除了默认 ref，这里恢复为有效 A，确保错误实现会选中它。
-        creds.set(ref, { value: '{"access_token":"fixture-a"}' })
-        service.refreshAccountCredential = async (...args) => { calls.push(args) }
-        await adapters.get(provider).options.refresh(otherId)
-        assert.deepEqual(calls, [[otherRef, ctx.accountPool, otherId]], `${provider}: 实际认证续期绑定 B`)
-        const lookup = ctx.accountPool.findAccountIdByCredential
-        try {
-          assert.equal(await adapters.get(provider).options.queueAccountIdForCredential({ access_token: 'fixture-b' }), otherId)
-          ctx.accountPool.findAccountIdByCredential = async () => { throw new Error('fixture strict lookup failed') }
-          await assert.rejects(adapters.get(provider).options.queueAccountIdForCredential({ access_token: 'fixture-b' }), /strict lookup failed/)
-        } finally { ctx.accountPool.findAccountIdByCredential = lookup }
-        await assert.rejects(adapters.get(provider).options.refresh('missing-account'), /当前请求的账号已移除/)
-        assert.equal(calls.length, 1, '账号删除后不得退回 A 续期')
-      } finally {
-        service.refreshAccountCredential = saved
-        await ctx.accountPool.removeAccount(otherId)
-        creds.delete(otherRef)
-      }
-    }
   } finally {
     ctx.credentials.resolve = originalResolve
     globalThis.fetch = originalFetch
@@ -157,8 +128,7 @@ async function verifyGeminiQuotaUsesChannelFetcher({ call, outletState }) {
 
 async function verifyRefreshDispatch({ ctx, call }) {
   const providers = [
-    'lobsterai', 'qoder', 'qodercn', 'trae',
-    'cline', 'loomy', 'raccoon', 'minimax', 'zcode', 'gemini',
+    'lobsterai', 'trae', 'cline', 'loomy', 'minimax', 'gemini',
   ]
   for (const provider of providers) {
     const service = ctx[`${provider}Auth`]

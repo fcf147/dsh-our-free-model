@@ -47,9 +47,9 @@ SVG 几何与品牌色，供 `components/provider-icon.tsx` 渲染。
   当前 61 个有图标，15 个没有（Agnes AI、Cheaper Inference、Experiential、
   FleetRelay、Lightning、NaraRoute、Opper、OrcaRouter、Poolside、Scaleway、
   TokenRouter、Wafer、BazaarLink、Kimchi、LLaMA.cpp）。
-- **EAC 渠道**（`client.js` 的 `CHANNEL_PROVIDERS`）：Qoder、Qoder 中国版、
-  TRAE、Cline、MiniMax Code、Gemini 有图标；LobsterAI、Loomy、Raccoon、
-  ZCode 没有。
+- **EAC 渠道**（`client.js` 的 `CHANNEL_PROVIDERS`）：TRAE、Cline、MiniMax
+  Code、Gemini 有图标；LobsterAI、Loomy 没有。Qoder、Qoder 中国版、
+  Raccoon、ZCode 已从本 fork 移除。
 - **客户端**（`src/plugins.js` 的 `WORKBENCH_CLIENTS`）：Codex CLI、
   Codex Desktop、Claude Code、Gemini CLI 有图标；CC Switch、Codex++ 没有。
 

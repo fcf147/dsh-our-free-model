@@ -5,33 +5,22 @@ import Schema from '@deepseek-ai/schemastery'
 import { registerCodeArtsLlm, PROVIDER as CODEARTS_PROVIDER } from './llm-adapter.js'
 import { registerBuddyLlm } from './buddy-adapter.js'
 import { registerLobsteraiLlm } from './lobsterai-adapter.js'
-import { registerQoderLlm } from './qoder-adapter.js'
 import { registerTraeLlm } from './trae-adapter.js'
 import { registerClineLlm } from './cline-adapter.js'
 import { registerLoomyLlm, parseLoomyRemoteModels } from './loomy-adapter.js'
-import { registerRaccoonLlm } from './raccoon-adapter.js'
 import { CODEARTS_CREDENTIAL_REF, CodeArtsAuth } from './service.js'
 import { BUDDY_CREDENTIAL_REF, BuddyAuth } from './buddy-auth.js'
 import { LobsteraiAuth } from './lobsterai-auth.js'
-import { QoderAuth } from './qoder-auth.js'
 import { TraeAuth } from './trae-auth.js'
 import { ClineAuth } from './cline-auth.js'
 import { LoomyAuth } from './loomy-auth.js'
-import { RaccoonAuth } from './raccoon-auth.js'
 import { LOOMY } from './loomy-product.js'
 import { LoomyBalanceSelector } from './loomy-balance-selector.js'
-import { RACCOON } from './raccoon-product.js'
-import { ZcodeAuth } from './zcode-auth.js'
-import { registerZcodeLlm } from './zcode-adapter.js'
-import { ZCODE } from './zcode-product.js'
-import { ZCODE_CAPTCHA_FALLBACK } from './zcode-captcha.js'
-import type { CarrierOutcome } from './captcha-carrier.js'
-import type { ZcodeCredential } from './zcode.js'
 import { AccountPool, allAccountsRateLimitedForModel } from './account-pool.js'
 import { nextUtc8DayStartMs } from './model-queue.js'
 import { hasLegacyNamespaceRegistration, settingsOf, suppressAutoSettingsPage } from './settings-compat.js'
 import type { ImageRequestTarget } from './image-budget.js'
-import { buildRaccoonNickname, registerChannelPackRpc } from './channel-pack-rpc.js'
+import { registerChannelPackRpc } from './channel-pack-rpc.js'
 import { CODEBUDDY, type BuddyProduct } from './product.js'
 import { mountOpenAiGateway } from './openai-gateway/index.js'
 import { installLoopResume } from './loop-recovery.js'
@@ -43,17 +32,14 @@ import { createTokenLedgerStore } from './token-ledger-store.js'
 import { buddyExpiringWindowDays } from './buddy-balance-rank.js'
 import { BuddyBalanceSelector, pickBuddyAccount } from './buddy-balance-selector.js'
 import { LOBSTERAI } from './lobsterai-product.js'
-import { QODER, QODER_CN } from './qoder-product.js'
 import { TRAE } from './trae-product.js'
 import { CLINE } from './cline-product.js'
 import { configureDeadModelStore, withDeadModelPruning } from './dead-model-store.js'
 import type { CodeArtsCredential, BuddyCredential } from './types.js'
 import type { LobsteraiCredential } from './lobsterai.js'
-import type { QoderCredential } from './qoder.js'
 import type { TraeCredential } from './trae.js'
 import type { ClineCredential } from './cline.js'
 import type { LoomyCredential } from './loomy.js'
-import type { RaccoonCredential } from './raccoon.js'
 import { MinimaxAuth } from './minimax-auth.js'
 import { registerMinimaxLlm } from './minimax-adapter.js'
 import { MINIMAX } from './minimax-product.js'
@@ -282,8 +268,7 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
   // 在模型设置页上已无消费者（详见该函数头的说明）。
   registerProviderSettings(
     ctx, 'llm-buddy', 'llm-codearts', 'llm-lobsterai',
-    'llm-qoder', 'llm-qodercn', 'llm-trae', 'llm-cline', 'llm-loomy', 'llm-raccoon',
-    'llm-minimax', 'llm-zcode', 'llm-gemini',
+    'llm-trae', 'llm-cline', 'llm-loomy', 'llm-minimax', 'llm-gemini',
   )
   // CodeArts 签名传输的 fetcher 必须由服务实例持有：续期/模型列表走独立出口。
   const service = new CodeArtsAuth(ctx, { fetcher: signedNetwork.fetch })
@@ -554,159 +539,6 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
     readImageRequest: makeReadImageRequest(ctx),
     accountPool: pool,
     product: LOBSTERAI,
-  })
-
-  // ===== Qoder (阿里系 AI IDE) 服务 =====
-  // 第五个产品线，协议与四者**都不同源**：PKCE 设备码轮询登录
-  // （不起本地回调服务器，见 src/qoder-oauth.ts）。
-  // 服务名由产品 id 派生，注册为 ctx.qoderAuth。
-  // 与其它 provider 一样不注册斜杠命令：入口在 Channel Pack 的 Qoder 面板。
-  const qoder = new QoderAuth(ctx)
-  /**
-   * 「本次实际使用的账号 id」跟踪表（provider id → 账号 id）。
-   *
-   * ## 为什么需要它
-   *
-   * 额度受限时要标记**当前账号**（见 `QoderAdapter.switchAccountOnQuota`）。
-   * 但「当前账号」不能靠「再问一次账号池的默认账号」得到 —— 池的选号是
-   * `getAvailableAccount()` 的即时决策，与适配器**本次实际拿到**的那份凭据
-   * 可能是两个账号（例如池已因限流切走，而适配器手上仍是旧凭据）。
-   * 标记落错账号的后果：真正受限的账号没被标记 → 下次又被选中 → 反复撞墙；
-   * 无辜账号被标记 → 它当天用不了（虽不致命，但属无谓损失）。
-   *
-   * 故在 `resolveCredential` 里**记录实际返回的那个账号**，供适配器查询。
-   * 用 `Map` 按 provider 分开，国际版与中国版互不影响。
-   */
-  const activeQoderAccountId = new Map<string, string | undefined>()
-  const qoderAdapter = registerQoderLlm(ctx, {
-    credentialRef: credentialRef(QODER.defaultCredentialRef),
-    resolveCredential: async (modelId?: string) => {
-      // 只从 Qoder 自己的账号池取账号，回退到自己的单凭据 ref，
-      // 保证不会串用其它 provider 的凭据。
-      // provider 实参用 QODER.id 而非字面量 'qoder'：写死字面量在
-
-      // ⚠️ `modelId` 透传：Qoder 的额度是「模型 + 账号」维度（见
-      // `qoder-adapter.ts` 的 `switchAccountOnQuota`），传空串会让它刚写下的
-      // 当日额度标记在下次选号时被忽略。
-      const available = await pool.getAvailableAccount(QODER.id, modelId ?? '')
-      if (available) {
-        activeQoderAccountId.set(QODER.id, available.entry.id)
-        // Token 账本（第 2 期）：回报「本笔请求解析出的账号」。
-        reportLedgerAccount(QODER.id, available.entry.id)
-        return available.credential as QoderCredential
-      }
-      // 回退到单凭据路径：没有账号条目可标记，清空以免标记到过期的 id。
-      activeQoderAccountId.set(QODER.id, undefined)
-      throwIfAllAccountsRateLimited(QODER, modelId)
-      const resolved = await ctx.credentials.resolve(credentialRef(QODER.defaultCredentialRef))
-      if (!resolved) return undefined
-      try {
-        return JSON.parse(resolved.value) as QoderCredential
-      } catch {
-        return undefined
-      }
-    },
-    refresh: async (accountId?: string) => {
-      // 必须刷新**解析凭据时所用的那一个**账号，而不是默认单凭据 ref。
-      //
-      // 为什么：resolveCredential（上面）优先从账号池取
-      // `QODER_ACCOUNT_XXX` 的凭据，而 `qoder.refresh()` 读写的是
-      // `QODER_ACCESS_TOKEN`。两者错配的后果是 —— 适配器检测到池凭据
-      // 过期 → 调 refresh → 成功回写到**另一个** ref → 再 resolve 仍取到
-      // 那份未更新的过期凭据 → 带着过期 token 发请求 → 401。
-      // 用户看到的是「刚在 Channel Pack 登录好，却一直认证失败」，
-      // 而日志里续期全是成功的，极难排查。
-      const available = await accountForRefresh(QODER.id, accountId)
-      if (available) await qoder.refreshAccountCredential(available.entry.credentialRef, pool, available.entry.id)
-      else await qoder.refresh()
-    },
-    readImage: makeReadImage(ctx),
-    // 图片请求版本（缩放）桥接：issue !IKITT9。该家实测 15 张原图（≈57 MiB）
-    // 直接 `TRANSPORT: fetch failed`，撞的是请求体体积。
-    // ⚠️ qoder 与 qodercn **共用同一个 QoderAdapter 类**，故两站同时受益
-    //（与「差异收敛到产品配置」这个模式一致 —— 别以为只改了一站）。
-    readImageRequest: makeReadImageRequest(ctx),
-    accountPool: pool,
-    product: QODER,
-    // 额度受限时标记「本次实际使用的账号」（理由见 `activeQoderAccountId` 注释）。
-    currentAccountId: () => activeQoderAccountId.get(QODER.id),
-    // 以本次实际凭据查账号，避免并发请求间共享的 activeQoderAccountId 串号。
-    queueAccountIdForCredential: async credential => {
-      const id = await pool.findAccountIdByCredential(QODER.id, credential.access_token)
-      return id.length > 0 ? id : undefined
-    },
-    onQueueAccountSwitch: () => {
-      ctx.logger?.info?.(`[channel-pack] ${QODER.displayName} 排队时已尝试切换账号`)
-    },
-    onQueueRotationFailure: reason => {
-      ctx.logger?.warn?.(`[channel-pack] ${QODER.displayName} 排队换号失败，将继续等待并重试`)
-      if (reason !== undefined) ctx.logger?.debug?.(`[channel-pack] ${QODER.id} queue rotation detail: ${String(reason)}`)
-    },
-  })
-
-  // ===== Qoder 中国版（qodercn）=====
-  // 与上面的国际版是**同一套协议实现**的第二个实例（差异全在 QODER_CN 配置里：
-  // 域名 qoder.cn / openapi.qoder.com.cn / gateway.qoder.com.cn、client_id
-  // 732aef47-…、以及一张自己的 14 条模型表）。刻意**不复制**任何 qoder*.ts
-  // 实现文件 —— 协议同源，复制会让同类缺陷（tools 不下发、工具历史丢
-  // tool_calls、错误帧不抛错）修两遍。
-  // 服务名由 `${product.id}Auth` 派生，注册为 ctx.qoderCnAuth。
-  // 不注册斜杠命令：入口在 Channel Pack 的「Qoder (中国版)」面板。
-  const qoderCn = new QoderAuth(ctx, { product: QODER_CN })
-  const qoderCnAdapter = registerQoderLlm(ctx, {
-    credentialRef: credentialRef(QODER_CN.defaultCredentialRef),
-    resolveCredential: async (modelId?: string) => {
-      // 只取中国版自己账号池的账号，回退到 QODERCN_ACCESS_TOKEN。
-      // ⚠️ provider 实参必须是 QODER_CN.id：写死 'qoder' 会让中国版
-
-      // ⚠️ `modelId` 透传：与 QODER.id 同因（当日额度是「模型 + 账号」维度）。
-      const available = await pool.getAvailableAccount(QODER_CN.id, modelId ?? '')
-      if (available) {
-        activeQoderAccountId.set(QODER_CN.id, available.entry.id)
-        // Token 账本（第 2 期）：回报「本笔请求解析出的账号」。
-        reportLedgerAccount(QODER_CN.id, available.entry.id)
-        return available.credential as QoderCredential
-      }
-      activeQoderAccountId.set(QODER_CN.id, undefined)
-      throwIfAllAccountsRateLimited(QODER_CN, modelId)
-      const resolved = await ctx.credentials.resolve(credentialRef(QODER_CN.defaultCredentialRef))
-      if (!resolved) return undefined
-      try {
-        return JSON.parse(resolved.value) as QoderCredential
-      } catch {
-        return undefined
-      }
-    },
-    refresh: async (accountId?: string) => {
-      // ⚠️ 必须刷新**解析凭据时所用的那一个**账号，而不是默认单凭据 ref。
-      // 理由与国际版那条真实缺陷完全同因：resolveCredential 优先取池内凭据，
-      // 而 refresh() 读写 QODERCN_ACCESS_TOKEN，两者错配会让日志里续期全成功、
-      // 用户却「刚登录却一直认证失败」。
-      const available = await accountForRefresh(QODER_CN.id, accountId)
-      if (available) await qoderCn.refreshAccountCredential(available.entry.credentialRef, pool, available.entry.id)
-      else await qoderCn.refresh()
-    },
-    readImage: makeReadImage(ctx),
-    // 同 QODER：两站共用同一个适配器类，缩放桥接也必须两边都接
-    //（只接一边会让中国版的截图照样撞 57 MiB）。
-    readImageRequest: makeReadImageRequest(ctx),
-    accountPool: pool,
-    product: QODER_CN,
-    // 额度受限时用它标记「当前账号」（见 `QoderAdapter.switchAccountOnQuota`）。
-    // ⚠️ 取「**本次实际使用**的账号」而非池里默认那一个：池的默认账号可能与之
-    // 不同（例如本账号被限流、池已切到别的账号），标错就会让标记落在无辜账号上。
-    currentAccountId: () => activeQoderAccountId.get(QODER_CN.id),
-    queueAccountIdForCredential: async credential => {
-      const id = await pool.findAccountIdByCredential(QODER_CN.id, credential.access_token)
-      return id.length > 0 ? id : undefined
-    },
-    onQueueAccountSwitch: () => {
-      ctx.logger?.info?.(`[channel-pack] ${QODER_CN.displayName} 排队时已尝试切换账号`)
-    },
-    onQueueRotationFailure: reason => {
-      ctx.logger?.warn?.(`[channel-pack] ${QODER_CN.displayName} 排队换号失败，将继续等待并重试`)
-      if (reason !== undefined) ctx.logger?.debug?.(`[channel-pack] ${QODER_CN.id} queue rotation detail: ${String(reason)}`)
-    },
   })
 
   // ===== TRAE（字节 TRAE IDE）服务 =====
@@ -994,74 +826,6 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
     product: LOOMY,
   })
 
-  // ===== Raccoon Work（商汤小浣熊）服务 =====
-  // 第九个产品线。登录与 Loomy 同型（**本地页承载**的微信扫码 + 短信双路径），
-  // 但**有** refresh 端点（凭据可静默续期），且客户端可能未安装。
-  //
-  // ⚠️ **不依赖客户端**：官方桌面端靠 `office-raccoon://auth/callback` 自定义协议
-  // 回调，本插件（宿主侧 Node 进程）收不到；故改为「宿主本地生成 code + 自行轮询」，
-  // 完全绕开该回调。凭据存插件自有的 ctx.credentials，不读客户端任何文件。
-  // 见 tests/unit/raccoon-client-independence.spec.ts 的回归防线。
-  //
-  // 服务名由 RaccoonAuth 依 product.id 派生，注册为 ctx.raccoonAuth。
-  // 不注册斜杠命令：入口在 Channel Pack 的 Raccoon 面板。
-  const raccoon = new RaccoonAuth(ctx)
-  const raccoonAdapter = registerRaccoonLlm(ctx, {
-    credentialRef: credentialRef(RACCOON.defaultCredentialRef),
-    resolveCredential: async (modelId?: string) => {
-      // 只从 raccoon 自己的账号池取账号，回退到自己的单凭据 ref，
-      // 保证不会串用其它 provider 的凭据。
-      // provider 实参用 RACCOON.id 而非字面量：写死字面量在改名/多产品场景下
-
-      const available = await pool.getAvailableAccount(RACCOON.id, modelId ?? '')
-
-      // 联合（历史遗留），与 `RaccoonCredential` 无充分重叠，故经 `unknown` 转换。
-      // 运行时安全性由 provider 过滤保证：查询用 `RACCOON.id`，取到的必是 raccoon 凭据。
-      if (available) {
-        // Token 账本（第 2 期）：回报「本笔请求解析出的账号」。
-        reportLedgerAccount(RACCOON.id, available.entry.id)
-        return available.credential as unknown as RaccoonCredential
-      }
-      // 429 的短冷却与 402 的次日额度共用同一张表；让解析侧保留
-      // RATE_LIMIT 语义，否则选号入口会把「等 60 秒」误报成「今天用完」。
-      throwIfAllAccountsRateLimited(RACCOON, modelId, 15 * 60_000)
-      const resolved = await ctx.credentials.resolve(credentialRef(RACCOON.defaultCredentialRef))
-      if (!resolved) return undefined
-      try {
-        return JSON.parse(resolved.value) as RaccoonCredential
-      } catch {
-        return undefined
-      }
-    },
-    refresh: async (accountId?: string) => {
-      const entry = accountId === undefined ? undefined
-        : pool.listAccountsByProvider(RACCOON.id).find(account => account.id === accountId)
-      if (accountId !== undefined && entry === undefined) throw new Error('raccoon: account no longer exists')
-      if (entry) await raccoon.refreshAccountCredential(entry.credentialRef, pool, entry.id)
-      else await raccoon.refresh()
-      const resolved = await ctx.credentials.resolve(credentialRef(entry?.credentialRef ?? RACCOON.defaultCredentialRef))
-      if (!resolved) throw new Error('raccoon: credential no longer exists')
-      return JSON.parse(resolved.value) as RaccoonCredential
-    },
-    nextAccount: async (modelId, tried) => {
-      const next = await pool.getAvailableAccount(RACCOON.id, modelId, tried)
-      if (!next) return undefined
-      reportLedgerAccount(RACCOON.id, next.entry.id)
-      return { accountId: next.entry.id, credential: next.credential as unknown as RaccoonCredential }
-    },
-    // 远端模型目录：委托给 RaccoonAuth.fetchModels（它负责 Bearer 头与
-    // visible 过滤 + raccoonDisplayName 生成含倍率的展示名）。
-    // 失败时返回空数组，由适配器回退兜底表。
-    fetchRemoteModels: () => raccoon.fetchModels(pool),
-    // 图片字节桥接：按模型能力判定（远端 tags 含 vision）。
-    readImage: makeReadImage(ctx),
-    // ⚠️ raccoon 尤其需要请求版本：该网关按**请求体字节**设限
-    // （实测 `HTTP_413: request body exceeds 10MB`，两张大截图就占掉大半配额）。
-    readImageRequest: makeReadImageRequest(ctx),
-    accountPool: pool,
-    product: RACCOON,
-  })
-
   // ===== MiniMax Code（中国版）服务 =====
   //
   // ⚠️ 登录走 **OAuth 设备码 + PKCE**（与 Qoder 同型：不起本地监听端口，
@@ -1234,246 +998,6 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
     ...ctx.logger === undefined ? {} : { logger: ctx.logger },
   })
 
-  //
-  // 早期实现把服务端的 `name` 直接当昵称用，而实测它是**自动生成的默认名**
-  //（本机账号是 `RaccoonAva`），注册第二个账号时会重名、无法区分；
-  // 且凭据里没存 `phone`（后来才发现 `user_info.phone` 可用于消歧）。
-  // 光改代码只影响新登录的账号，故这里主动补一次：
-  // 拉 `user_info` 补 `phone`，并用 `buildRaccoonNickname` 重算昵称。
-  //
-  // ⚠️ 幂等 + 失败不阻塞启动（`repairAccountNicknames` 内部逐账号 catch）。
-  void raccoon.repairAccountNicknames(pool, buildRaccoonNickname).then((repaired) => {
-    if (repaired.length > 0) {
-      ctx.logger.info(
-        `[channel-pack] 已修正 ${repaired.length} 个 Raccoon 账号的显示名（追加手机号尾号以便区分）：${repaired.join(', ')}`,
-      )
-    }
-  }).catch((error: unknown) => {
-    ctx.logger.warn(`[channel-pack] 修正 Raccoon 账号显示名失败：${String(error)}`)
-  })
-
-// ===== ZCode（智谱 z.ai 免费额度通道）=====
-//
-// 形态与前面所有 provider **相同**：读凭据 → 直发远端。
-// 登录走**插件自己的**授权流（`zcode-login.ts`），凭据由插件写进
-// `ctx.credentials`，**不读取本机 ZCode 客户端的任何数据**（2026-10-05 决策，
-// 理由见 `zcode.ts` 文件头）。
-//
-// 与其余 provider 的三处差异（全部实测）：
-//   1. 协议是 **Anthropic Messages**（不是 OpenAI 兼容）——
-//      见 `zcode-anthropic.ts` 的转换层。
-//   2. captcha **按需**产出（默认不带验证头探一次，被 `3007` 拒才 mint，并按
-//      「账号 × 模型」记 2 分钟）—— 见 `zcode-captcha.ts` 与 `captcha-requirement.ts`；
-//      mint 的耗时口径与「上游并非每次都要验证」的实测见 README 的 ZCode 章节。
-//   3. 请求体必须带官方身份块与首轮日期块，否则上游回 `3012` ——
-//      见 `zcode-identity.ts`。
-//
-// ⚠ **完全可脱离官方客户端使用**：登录走官方 CLI 设备授权流
-// （`/oauth/cli/init` → 浏览器授权 → `/oauth/cli/poll/{flow_id}`，
-// 纯 HTTP，见 `zcode-login.ts`），且 `device_mid` **由插件自己生成**。
-//
-// ⚠ **不可续期**：凭据是静态的（JWT 的 payload 里没有 `exp`）。
-// 失效时上游回 401/1002，适配器归为 AUTH 并提示用户重新登录。
-//
-// 服务名注册为 ctx.zcodeAuth（由 `Service` 基类完成）。
-// 不注册斜杠命令：入口在 Channel Pack 的 ZCode 面板。
-//
-// ⚠ **必须把账号池传进去**：`ZcodeAuth.current()` 要从账号池里找用户在
-// Channel Pack 登录时创建的那个 ref（`ZCODE_ACCOUNT_XXXX`），而不是只认固定的
-// `ZCODE_CREDENTIAL`。不传的话「登录成功但面板显示未配置」。
-const zcode = new ZcodeAuth(ctx, {
-  accountPool: pool,
-  /**
-   * ★ 二期内部载体（`src/captcha-carrier.ts`）的诊断日志。
-   *
-   * 那两条告警（「内部载体的 param 被上游拒（第 N 次）」「累计拒 3 次 ⇒ 本次运行禁用
-   * 内部载体」）是排查「内部载体为什么没起作用 / 为什么被自动关掉」的**唯一**线索，
-   * 缺省不接就等于线上什么都看不见。
-   * ⚠ 取 logger 用两级可选链（同文件既有的 `log` / `makeReadImageRequest` 写法）：
-   *   宿主某些形态不给 logger，写成点号直调会让调用点所在的产出路径抛 TypeError。
-   */
-  carrierLog: (message: string) => {
-    ctx.logger?.warn?.(message)
-  },
-})
-/**
- * captcha 配置：优先向服务端索取，失败回退内置兜底值。
- *
- * ## ⚠ 这里**不再**做缓存（2026-10-01 修正）
- *
- * 旧实现是 `??=` 的**永久缓存**，两个缺陷（都已实测确认）：
- *
- * 1. **服务端换 `sceneId`／灰度切换后永不生效**（必须重启宿主才能跟上）；
- * 2. **首次拉取失败会被永久固化** —— `??=` 连「回退到兜底值」这个结果
- *    一起记住，此后即使服务端恢复也不会重试。
- *
- * 正确做法是官方 `f3()` 的语义：**60 秒 TTL + 在飞去重、失败不缓存**。
- * 那个能力已下沉到 `ZcodeAuth.fetchCaptchaConfig()`
- *（见其 `captchaConfigCacheInstance`），故这里只做「拿 → 回退」的编排。
- */
-const resolveZcodeCaptchaConfig = async (): Promise<{ region: string; prefix: string; sceneId: string }> => {
-  const remote = await zcode.fetchCaptchaConfig().catch(() => undefined)
-  if (remote !== undefined) {
-    zcodeAdapter.setCaptchaConfig(remote)
-    return remote
-  }
-  return ZCODE_CAPTCHA_FALLBACK
-}
-/**
- * 「本次 ZCode 请求**实际使用**的账号 id」。
- *
- * ## 为什么需要（与 `activeQoderAccountId` 同因）
- *
- * 额度受限时适配器要**标记失败的账号**，而它能拿到的只有这个回调。
- * 池的选号是即时决策，且**切号后回调不会跟着变** —— 若适配器改用
- * 「池当前的默认账号」，切到 B 之后失败时会**再标记一次 A**，
- * B 从未被标记，下次取号又把 B 选中，于是在 A/B 之间反复空转
- * （`qoder-adapter.ts` 的 `switchAccountOnQuota` 注释里记了这条实测）。
- *
- * ⇒ 在 `resolveCredential` 里记录**实际返回的那个账号**，供适配器查询。
- */
-const activeZcodeAccountId = new Map<string, string | undefined>()
-const zcodeAdapter = registerZcodeLlm(ctx, {
-  credentialRef: credentialRef(ZCODE.defaultCredentialRef),
-  resolveCredential: async (modelId?: string) => {
-    // 只从 zcode 自己的账号池取账号，回退到自己的单凭据 ref，
-    // 保证不会串用其它 provider 的凭据。
-    // provider 实参用 ZCODE.id 而非字面量：写死字面量在改名/多产品场景下
-
-    const available = await pool.getAvailableAccount(ZCODE.id, modelId ?? '')
-    /**
-     * `getAvailableAccount` 的凭据类型是历史遗留的联合类型，
-     * 与 `ZcodeCredential` 无充分重叠，故经 `unknown` 转换。
-     * 运行时安全性由 provider 过滤保证：查询用 `ZCODE.id`，取到的必是 zcode 凭据。
-     */
-    if (available) {
-      // 记下**实际返回的**账号：额度受限时适配器要标记的是它。
-      activeZcodeAccountId.set(ZCODE.id, available.entry.id)
-      // Token 账本（第 2 期）：回报「本笔请求解析出的账号」。
-      reportLedgerAccount(ZCODE.id, available.entry.id)
-      return available.credential as unknown as ZcodeCredential
-    }
-    /**
-     * 账号池里没有条目时，落到 `ZcodeAuth.current()` ——
-     * 它已经实现了「账号池 → 单凭据 ref」的解析顺序。
-     * ⚠ 不要在这里重复实现那条优先级（重复必然漂移）。
-     *
-     * ⚠ 同时**清空**记录：没有账号条目可标记，留着旧 id 会误伤一个无辜账号。
-     */
-    activeZcodeAccountId.set(ZCODE.id, undefined)
-    return await zcode.current()
-  },
-  refresh: async () => {
-    /**
-     * ⚠ ZCode **没有** refresh 端点（与 Loomy 恒 false 同类，但原因不同）：
-     * 凭据是**静态**的（登录一次就固定下来，JWT 里没有 `exp`）。
-     *
-     * 这里做的是「重读凭据并回写账号条目」，让用户重新登录后不重启即可生效。
-     *
-     * ⚠⚠ **绝不能用 `current()` + `getAvailableAccount()` 的组合**（审查发现的
-     * 真实缺陷，与 `refreshAll` 里记录的那个数据破坏同类）：`current()` 会**先读池**
-     * 且**不看 `enabled`**（它按数组顺序取第一个能解析的），而 `getAvailableAccount`
-     * **会过滤 `enabled`** —— 两者选的可能是**不同账号**，于是「把 A 的凭据写进 B 的
-     * ref」，30 分钟一轮就会串掉整池。
-     * 正确做法是交给 `refreshAll`：它逐账号读**自己的** ref、写回**自己的** ref。
-     */
-    await zcode.refreshAll(pool)
-  },
-  // ⚠ captcha 是**一次性**的 —— 每次调用都必须现产一个新 param。
-  // 走 `zcode.mintCaptcha`：整个插件**共用一台**常驻浏览器
-  //（适配器自建会变成两台，白占 200MB）。
-  //
-  // ⚠ `options.signal` 必须继续往下传：captcha 侧的取页等待与建连历史上有
-  // 无超时的路径，不传就等于「用户点停止也停不下来」（真实缺陷，2026-09-29）。
-  mintCaptcha: async (options?: { signal?: AbortSignal }) => {
-    const config = await resolveZcodeCaptchaConfig()
-    return await zcode.mintCaptcha(config, options)
-  },
-  /**
-   * ★ 二期内部载体：推理热路径取 param 走**载体链**（内部供给槽优先，等不到才落
-   * 上面那条 chromium 链）。与 `mintCaptcha` 的差别只有「返回值带来源」这一层。
-   *
-   * ⚠ 这两条回调**必须都在**：少接一条，被 `3007` 拒的那一发就退回普通入口重新取，
-   *   归因（内部 vs chromium）就此丢失 —— 累计拒绝到阈值的自动禁用也就永远到不了。
-   * ⚠ 载体链不可用（`DSH_ZCODE_INTERNAL_CARRIER=0` / web 版从未收到贡献）时
-   *   `zcode.mintCaptchaParam` 自己会退回那条 chromium 链 ⇒ 这里不需要判断开关。
-   */
-  mintCaptchaParam: async (options?: { signal?: AbortSignal }) => {
-    const config = await resolveZcodeCaptchaConfig()
-    return await zcode.mintCaptchaParam(config, options)
-  },
-  mintCaptchaAfterRejection: async (
-    outcome: CarrierOutcome,
-    options?: { signal?: AbortSignal },
-  ) => {
-    const config = await resolveZcodeCaptchaConfig()
-    return await zcode.mintCaptchaAfterRejection(outcome, config, options)
-  },
-  /**
-   * captcha 的 region —— **只是「连配置都没有」时的最后兜底**，正常路径不生效。
-   *
-   * ⚠ region 必须与产 param 的那份配置同源（真实缺陷，Gitee issue IKJNPS；
-   *   领取路径与推理路径各有一个实例）。上面三个 mint 回调都会走
-   *   `resolveZcodeCaptchaConfig()`，它把远端配置写进适配器
-   *   （`setCaptchaConfig`）⇒ 组头时适配器读的是 `captchaConfig.region`，
-   *   这里这个字面量只在自建浏览器那条腿（没有任何注入回调）且从未拉到配置时兜底。
-   *
-   * ⚠ 别把它写回「无条件生效」——服务端下发的 region 因账号/渠道而异
-   * （作者账号是 `cn`，z.ai 国际渠道实测 `sgp`），写死只会在 cn 区账号上碰巧正确。
-   */
-  captchaRegion: ZCODE_CAPTCHA_FALLBACK.region,
-  /**
-   * 诊断日志：把「先探后取」的前置耗时与补产事件接到宿主 logger。
-   *
-   * ⚠ **必须注入** —— 适配器里那三条出口（`zcode-adapter.ts` 的
-   * `前置耗时 …`、`上游要求 captcha（3007）…`、`captcha 被拒（3007），换新 param 重试`）
-   * 全走 `this.options.log?.()`，缺省**完全不输出**（见 `ZcodeAdapterOptions.log`
-   * 的注释）。不接上就是：带 captcha 的那一发比不带的慢一次 mint（稳态约 0.4–0.5
-   * 秒、首次含 chromium 冷启动 4.2 秒；口径见 README 的 ZCode 章节）在外部**没有任何可看的证据**
-   * —— 「先探后取到底生效没有」只能靠猜。
-   *
-   * ⚠ 取 logger 用可选链 `?.info?.()`：与同文件既有防御写法一致
-   * （`makeReadImageRequest` 的降级告警、`refreshAllCredentials` 的批量续期告警
-   * 都是 `ctx.logger?.warn?.(...)`）。宿主没给 logger 时**静默**，
-   * 绝不能在推理路径上抛错。
-   */
-  log: (message: string) => {
-    ctx.logger?.info?.(message)
-  },
-  /**
-   * ⚠ **图片字节桥接** —— 这是图片能真正发出去的关键。
-   *
-   * DSH 的图片块只带 `attachment:{attachmentId}`，真正拿字节要经附件服务。
-   * 缺了这两项，`serializeMessages` 拿到**空映射**，图片会退化成
-   * `[image unavailable]` 占位符 —— 实测症状是模型回
-   * 「我在当前对话中没有收到任何图片」。
-   *
-   * ⚠ 与其余 provider 同款约定（十余处一致）：
-   *   - `readImage`：拿原始字节（内联为 data URL）
-   *   - `readImageRequest`：拿**按预算缩放后**的字节；**不可用时返回
-   *     `undefined`**（不抛错），适配器据此回退原图
-   */
-  readImage: makeReadImage(ctx),
-  // 图片请求版本（缩放）桥接：ZCode 免费通道的请求体没有实测硬上限，
-  // 但 base64 后的截图很大（2560×1600 各约 3.9 MB），两张就接近常见网关
-  // 的 10MB 门槛 —— 与 raccoon 的同因（issue !IKITT9 那一族）。
-  readImageRequest: makeReadImageRequest(ctx),
-  // 模型目录用静态白名单（实测可用的两个）—— 上游模型池含
-  // 实测返回空响应的两条（GLM-5-Turbo / GLM-5.2），故不枚举远端。
-  fetchRemoteModels: () => zcode.fetchRemoteModelsOnly(),
-  accountPool: pool,
-  product: ZCODE,
-  // 就绪判据 = 有可用凭据（插件自存的）。
-  isReady: async () => (await zcode.current()) !== undefined,
-  /**
-   * 额度用尽 / 无权益时，适配器据此**标记失败的账号并切换**。
-   *
-   * 回调的是「本次实际使用的账号」（理由见 `activeZcodeAccountId` 的注释）——
-   * 不要改成 `pool.getAvailableAccount(...)` 之类「再问一次池」的实现。
-   */
-  currentAccountId: () => activeZcodeAccountId.get(ZCODE.id),
-})
-
 /**
  * ⚠ **必须用 `fetchRemoteModelsOnly()` 而不是 `fetchModels()`**（来自 PR #31
  * `05e4ad7`，保留其与桥无关的部分；本地桥 `zcode-bridge.ts` 已随 PR #29 的
@@ -1558,21 +1082,14 @@ const zcodeAdapter = registerZcodeLlm(ctx, {
     ['codearts', (p) => service.refreshAll(p)],
     ['buddy', (p) => buddy.refreshAll(p)],
     ['lobsterai', (p) => lobsterai.refreshAll(p)],
-    ['qoder', (p) => qoder.refreshAll(p)],
-    ['qodercn', (p) => qoderCn.refreshAll(p)],
     ['trae', (p) => trae.refreshAll(p)],
     ['cline', (p) => cline.refreshAll(p)],
     // ⚠️ Loomy 不可续期：这里只探测**已过期**的账号（见 LoomyAuth.refreshAll）。
     ['loomy', (p) => loomy.refreshAll(p)],
-    // raccoon **可续期**：只按 refreshable 过滤，且只续进入 lead 窗口的账号。
-    ['raccoon', (p) => raccoon.refreshAll(p)],
     // MiniMax **可续期**（refresh_token 授权，会轮换 refresh_token）。
-    // 与 raccoon 同款：只按 refreshable 过滤，不看 enabled。
     ['minimax', (p) => minimax.refreshAll(p)],
-    // zcode **不可续期**（凭据是静态的）—— 但这个方法仍做实事：
     // 把各账号 ref 下最新的凭据回写一遍，让用户重新登录后无需重启 DSH。
     // ⚠ 只按 `refreshable` 过滤、**不看 `enabled`**（AGENTS.md 既有约定）。
-    ['zcode', (p) => zcode.refreshAll(p)],
     // ⚠️ Gemini **可续期**（Google OAuth 的 refresh_token，且会轮换）。
     // ⚠️ 漏了这一行定时器不武装：凭据到期后**不会自动续期**，
     // 用户会看到「每隔一小时就要重新登录」，且日志里一个字都没有。
@@ -1625,15 +1142,11 @@ const zcodeAdapter = registerZcodeLlm(ctx, {
       service.stop()
       buddy.stop()
       lobsterai.stop()
-      qoder.stop()
-      qoderCn.stop()
       trae.stop()
       cline.stop()
       loomy.stop()
-      zcode.stop()
       // ⚠ 必须 dispose captcha 浏览器 —— 否则会留下孤儿 chromium
       //（约 200-400MB，且用户没有界面能关掉它）。
-      zcodeAdapter.stop()
     }, 'channel-pack: multi-account refresh scheduler')
   }).catch((error: unknown) => {
     // ⚠️ 原来这个 `.then()` **没有** `.catch()`：`listAllAccounts()` 一旦 reject
@@ -1650,14 +1163,10 @@ const zcodeAdapter = registerZcodeLlm(ctx, {
     service.stop()
     buddy.stop()
     lobsterai.stop()
-    qoder.stop()
-    qoderCn.stop()
     trae.stop()
     cline.stop()
     loomy.stop()
-    zcode.stop()
     // 同上：captcha 浏览器必须随插件一起回收。
-    zcodeAdapter.stop()
   }, 'channel-pack.scheduler (legacy)')
 
   // ===== OpenCode Zen（账号槽 + 匿名槽平权混合池）=====
@@ -1827,15 +1336,11 @@ const zcodeAdapter = registerZcodeLlm(ctx, {
     codearts: pruned(CODEARTS_PROVIDER, codearts),
     buddy: pruned('buddy', buddyAdapter),
     lobsterai: pruned(LOBSTERAI.id, lobsteraiAdapter),
-    qoder: pruned(QODER.id, qoderAdapter),
-    qodercn: pruned(QODER_CN.id, qoderCnAdapter),
     trae: pruned(TRAE.id, traeAdapter),
     cline: pruned(CLINE.id, clineAdapter),
     loomy: pruned(LOOMY.id, loomyAdapter),
-    raccoon: pruned(RACCOON.id, raccoonAdapter),
     minimax: pruned(MINIMAX.id, minimaxAdapter),
     gemini: pruned(GEMINI.id, geminiAdapter),
-    zcode: pruned(ZCODE.id, zcodeAdapter),
     ...(opencodeAdapter === undefined ? {} : { opencode: pruned(OPENCODE.id, opencodeAdapter) }),
   }
 
@@ -1844,7 +1349,7 @@ const zcodeAdapter = registerZcodeLlm(ctx, {
   // 丢的却是「下一轮工具调用能不能带上签名」。
   ctx.effect(() => () => { void geminiSigStore.flush().catch(() => {}) })
 
-  registerChannelPackRpc(ctx, pool, lobsterai, qoder, qoderCn, trae, cline, loomy, raccoon, minimax, zcode, gemini, modelAdapters, {
+  registerChannelPackRpc(ctx, pool, lobsterai, undefined, undefined, trae, cline, loomy, undefined, minimax, undefined, gemini, modelAdapters, {
     ...config,
     // ⚠️ 配额等附属查询必须复用同一出口；省略会让 gemini-credits 回落到裸 fetch。
     // CodeArts 的 credits 查询需要签名传输（directFetch 已绑定到 signedNetwork.fetch）。

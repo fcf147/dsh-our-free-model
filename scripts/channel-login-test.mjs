@@ -122,7 +122,7 @@ function makePopup() {
 
 {
   const pending = deferred(), tab = makePopup(), opens = []
-  const app = mount('zcode', {
+  const app = mount('lobsterai', {
     open: (...args) => { opens.push(args); return tab },
     create: () => pending.promise,
     fetch: () => assert.fail('reserved popup must not also launch through the host'),
@@ -133,7 +133,6 @@ function makePopup() {
   assert.deepEqual(opens, [['about:blank', '_blank']])
   assert.equal(tab.opener, null)
   assert.equal(app.loginCalls().length, 1, 'duplicate clicks must not create duplicate login accounts')
-  assert.equal(app.button('z.ai international').props.disabled, true)
   pending.resolve({ accountId: 'fixture-account', loginUrl: URL_FIXTURE })
   await login
   assert.deepEqual(tab.navigations, [URL_FIXTURE])
@@ -198,7 +197,7 @@ for (const url of ['javascript:alert(1)', 'https://user:password@example.invalid
 }
 {
   const pending = deferred(), tab = makePopup()
-  const app = mount('zcode', { open: () => tab, create: () => pending.promise })
+  const app = mount('lobsterai', { open: () => tab, create: () => pending.promise })
   const login = app.add()
   app.props.rpc = async () => ({ accounts: [], accountId: 'replacement-account' })
   app.render()
@@ -224,57 +223,17 @@ for (const url of ['javascript:alert(1)', 'https://user:password@example.invalid
 }
 console.log('ok  login click reservation, duplicate suppression, host/browser fallback, manual URL and popup cleanup')
 
-const preferenceKey = 'ofm:zcode:login-provider'
-for (const value of [undefined, 'corrupt', 'zai']) {
-  const storage = new Map(value === undefined ? [] : [[preferenceKey, value]])
-  const app = mount('zcode', { storage })
-  const expected = value === 'zai' ? 'zai' : 'bigmodel'
-  await app.add()
-  assert.equal(app.loginCalls()[0].payload.zcodeProvider, expected)
-  app.button('z.ai international').props.onClick()
-  await app.add()
-  assert.equal(app.loginCalls()[1].payload.zcodeProvider, 'zai')
-  app.unmount()
-  const restored = mount('zcode', { storage })
-  await restored.add()
-  assert.equal(restored.loginCalls()[0].payload.zcodeProvider, 'zai')
-  restored.unmount()
-}
-for (const broken of ['getter', 'methods', 'missing']) {
-  const app = mount('zcode')
-  if (broken === 'getter') Object.defineProperty(app.window, 'localStorage', { get() { throw new Error('fixture denied storage') } })
-  else app.window.localStorage = broken === 'missing' ? undefined
-    : { getItem() { throw new Error('fixture denied read') }, setItem() { throw new Error('fixture denied write') } }
-  // Mount a new component state with storage already unavailable.
-  app.unmount()
-  const fresh = harness()
-  Object.defineProperty(fresh.window, 'localStorage', { get: () => app.window.localStorage })
-  const calls = []
-  const props = { ...app.props, rpc: async (method, payload) => {
-    if (method === 'account.create') calls.push(payload)
-    return { accountId: 'fixture-account', accounts: [] }
-  } }
-  const render = () => fresh.render(() => fresh.api.ChannelCard(props))
-  const button = label => nodes(render()).find(node => node.type === 'button' && node.children.includes(label))
-  await button('Add account').props.onClick()
-  assert.equal(calls[0].zcodeProvider, 'bigmodel')
-  button('z.ai international').props.onClick()
-  await button('Add account').props.onClick()
-  assert.equal(calls[1].zcodeProvider, 'zai', 'denied storage must not prevent this-session selection')
-  fresh.unmount()
-}
 {
   const app = mount('lobsterai')
-  assert.equal(app.button('z.ai international'), undefined)
   await app.add()
   assert.deepEqual(app.loginCalls()[0].payload, { provider: 'lobsterai' })
   app.unmount()
 }
-console.log('ok  ZCode defaults, persistence, corrupt and inaccessible storage, and provider-only payloads')
+console.log('ok  login payloads and provider-specific UI boundaries')
 
 {
   const old = deferred()
-  const app = mount('qoder', { balance: () => old.promise })
+  const app = mount('lobsterai', { balance: () => old.promise })
   app.props.rpc = async () => ({ accounts: [{ accountId: 'fixture-account', balance: { total: 456 } }] })
   app.render()
   await settle()

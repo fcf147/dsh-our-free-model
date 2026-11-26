@@ -1,13 +1,14 @@
 /**
- * Only WorkBuddy international stays out of the model workspace.
+ * Five account channels stay out of the model workspace.
  *
  * This fork offers WorkBuddy China (workbuddy / CodeBuddy / buddy) and Huawei
- * Cloud MaaS (huaweicloud / codearts) again. Only WorkBuddy international
- * ("workbuddy-ai") is excluded. The engine is a pinned binary whose plugin
- * market is fetched at run time, so the exclusion is enforced on this
- * application's own management boundary: market and provider answers are
- * filtered, mutations are refused, and a model the engine serves through the
- * international channel never reaches the published catalog.
+ * Cloud MaaS (huaweicloud / codearts) again. Excluded are WorkBuddy
+ * international ("workbuddy-ai") plus the four channels removed after upstream
+ * stopped offering their free daily check-in (qoder, qodercn, raccoon, zcode).
+ * The engine is a pinned binary whose plugin market is fetched at run time, so
+ * the exclusion is enforced on this application's own management boundary:
+ * market and provider answers are filtered, mutations are refused, and a model
+ * the engine serves through an excluded channel never reaches the catalog.
  *
  * Runs against the real pinned executable, like magpie-engine-test.
  * Build first: node scripts/build-magpie-engine.mjs
@@ -37,14 +38,16 @@ for (const [name, value] of Object.entries({
   fs.mkdirSync(value, { recursive: true })
 }
 
-// Only the international build is denied. The separator tolerance covers
-// "workbuddy-ai", "workbuddy ai" and "workbuddy_ai" without swallowing the
-// restored China/Huawei spellings.
+// The five denied channels. DENIED mirrors src/magpie-policy.js: separator
+// tolerance covers "workbuddy-ai", "workbuddy ai" and "workbuddy_ai" without
+// swallowing the restored China/Huawei spellings; the longer qodercn alias is
+// listed before qoder so the redactor never leaves a fragment behind.
 const INTERNATIONAL = /workbuddy[\s_-]*ai/i
+const DENIED = /(?:workbuddy[\s_-]*ai|qodercn|qoder|raccoon|zcode)/i
 const INTL_PACKAGE = '@magpie-community/opencode-workbuddy-ai-auth'
 const CHINA_PACKAGE = '@magpie-community/opencode-workbuddy-auth'
 const CODEARTS_PACKAGE = '@magpie-community/opencode-codearts-auth'
-const IDS = ['workbuddy-ai'] // denied subscription ids
+const IDS = ['workbuddy-ai', 'qoder', 'qodercn', 'raccoon', 'zcode'] // denied subscription ids
 // Every alias this fork offers again: none may be filtered or refused.
 const RESTORED_IDS = ['workbuddy', 'codebuddy', 'buddy', 'codebuddy-cn', 'huaweicloud', 'codearts']
 const RESTORED_NAMES = /workbuddy|codebuddy|huaweicloud|huawei[\s-]*cloud|modelarts|codearts|华为云|码道/i
@@ -63,7 +66,7 @@ const listen = () => new Promise((resolve, reject) => {
   server.once('error', reject)
   server.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${server.address().port}`))
 })
-const mentionsInternational = value => INTERNATIONAL.test(JSON.stringify(value))
+const mentionsDenied = value => DENIED.test(JSON.stringify(value))
 const denied = async (method, route, body) => {
   try {
     await engine.request(method, route, body === undefined ? {} : { body })
@@ -118,29 +121,42 @@ try {
     await check(name, run)
   }
 
-  // 1. The international channel stays out of every market/list surface.
-  await engineCheck('the plugin market no longer offers the international channel', async () => {
+  // 1. All five denied channels stay out of every market/list surface.
+  await engineCheck('the plugin market no longer offers the denied channels', async () => {
     const listings = await read('api/plugins/listings')
-    assert(!mentionsInternational(listings.listings), 'listings must not name workbuddy-ai')
+    assert(!mentionsDenied(listings.listings), 'listings must not name a denied channel')
     assert(listings.listings.length > 5, 'other listings stay')
     const market = await read('api/plugins/market')
-    assert(!mentionsInternational(market.listings), 'market listings must not name workbuddy-ai')
+    assert(!mentionsDenied(market.listings), 'market listings must not name a denied channel')
     assert(market.listings.length > 5, 'other market listings stay')
     assert(Array.isArray(market.state.plugins), 'market state stays intact')
   })
 
-  await engineCheck('npm search and metadata leave only the international package out', async () => {
-    for (const q of ['workbuddy', 'workbuddy-ai', 'workbuddy ai', 'codearts', 'codebuddy']) {
-      const search = await read('api/plugins/search?q=' + encodeURIComponent(q))
-      assert(!search.hits.some(hit => mentionsInternational(hit.package)), `search hits for ${q} must not name workbuddy-ai`)
+  await engineCheck('npm search and metadata leave the denied packages out', async () => {
+    for (const q of ['workbuddy', 'workbuddy-ai', 'workbuddy ai', 'qoder', 'qodercn', 'raccoon', 'zcode', 'codearts', 'codebuddy']) {
+      let search
+      try {
+        search = await read('api/plugins/search?q=' + encodeURIComponent(q))
+      } catch (error) {
+        // The live npm registry can rate-limit the engine's search (429 -> 400).
+        // A failed upstream read carries no channel names, so there is nothing
+        // for policy to filter; the npm metadata assertions below still run.
+        if (error.message.includes(encodeURIComponent(q)) && /400|429/.test(error.message)) continue
+        throw error
+      }
+      assert(!search.hits.some(hit => mentionsDenied(hit.package)), `search hits for ${q} must not name a denied channel`)
     }
-    const npm = await read('api/plugins/npm?names=' + encodeURIComponent(`${INTL_PACKAGE},${CHINA_PACKAGE},${CODEARTS_PACKAGE},@magpie-community/opencode-zcode-auth`))
-    assert(!Object.keys(npm.npm).some(name => mentionsInternational(name)), 'npm metadata must not name workbuddy-ai')
-    // The restored channels are built into this fork's channel pack, not
-    // installed from the runtime plugin market, so their npm metadata may be
-    // absent upstream. Only require that policy does not *filter* them: an
-    // unrelated package and the China package (when upstream lists it) pass.
-    assert(Object.keys(npm.npm).some(pkg => pkg === '@magpie-community/opencode-zcode-auth'), 'unrelated package still answered')
+    // Every denied channel's own package is filtered from npm metadata; a
+    // genuinely unrelated package and the restored China/CodeArts packages
+    // are not refused by policy.
+    const names = [`${INTL_PACKAGE},${CHINA_PACKAGE},${CODEARTS_PACKAGE},@magpie-community/opencode-moonshot-cn-auth`,
+      ...IDS.map(id => `@magpie-community/opencode-${id}-auth`)]
+    for (const batch of names) {
+      const npm = await read('api/plugins/npm?names=' + encodeURIComponent(batch))
+      assert(!Object.keys(npm.npm).some(name => mentionsDenied(name)), 'npm metadata must not name a denied channel')
+    }
+    const unrelated = await read('api/plugins/npm?names=' + encodeURIComponent('@magpie-community/opencode-moonshot-cn-auth'))
+    assert(Object.keys(unrelated.npm).includes('@magpie-community/opencode-moonshot-cn-auth'), 'unrelated package still answered')
     const page = await fetch(base + 'api/plugins/page?name=' + encodeURIComponent(INTL_PACKAGE))
     assert.equal(page.status, 403)
     assert.match(await page.text(), /not offered by this build/)
@@ -152,13 +168,13 @@ try {
     }
   })
 
-  await engineCheck('installed-plugin and update listings exclude only the international build', async () => {
+  await engineCheck('installed-plugin and update listings exclude all denied channels', async () => {
     for (const route of ['api/plugins', 'api/plugins/updates', 'api/plugin-pages', 'api/plugin-panels',
       'api/plugins/github', 'api/usage/quotas', 'api/login/usage']) {
-      assert(!mentionsInternational(await read(route)), `${route} must not name workbuddy-ai`)
+      assert(!mentionsDenied(await read(route)), `${route} must not name a denied channel`)
     }
     const checked = await (await post('api/plugins/check', {})).json()
-    assert(!mentionsInternational(checked), 'a version check must not name workbuddy-ai')
+    assert(!mentionsDenied(checked), 'a version check must not name a denied channel')
   })
 
   // 2. Restored channels appear on the actionable surfaces again.
@@ -177,50 +193,55 @@ try {
     assert(providers.presets.some(preset => /huawei/i.test(preset.name)), 'Huawei Cloud preset name is back')
     assert(Object.keys(providers.movesTo || {}).some(id => RESTORED_IDS.includes(id)), 'a restored move target is back')
     const upstream = await read('api/upstream')
-    assert(!mentionsInternational(upstream), 'vendor status excludes only workbuddy-ai')
+    assert(!mentionsDenied(upstream), 'vendor status excludes all denied channels')
   })
 
-  await engineCheck('only the international id is denied, everywhere it can act', async () => {
-    const spellings = INTERNATIONAL
+  await engineCheck('all five denied channels are absent and refused everywhere they can act', async () => {
+    const spellings = DENIED
     const actionable = ['api/plugins', 'api/plugins/listings', 'api/plugins/market',
       'api/plugins/updates', 'api/plugin-pages', 'api/plugin-panels', 'api/importapps', 'api/upstream',
       'api/login/usage', 'api/usage/quotas']
     for (const route of actionable) {
       const answer = await read(route)
-      assert(!spellings.test(JSON.stringify(answer)), `${route} must not name workbuddy-ai`)
+      assert(!spellings.test(JSON.stringify(answer)), `${route} must not name a denied channel`)
     }
     const providers = await read('api/providers')
     assert(!providers.presets.some(preset => spellings.test(preset.id) || spellings.test(preset.name)),
-      'no preset offers workbuddy-ai')
-    assert(!Object.keys(providers.movesTo ?? {}).some(id => spellings.test(id)),
-      'no move target reaches workbuddy-ai')
+      'no preset offers a denied channel')
+    assert(!Object.keys(providers.movesTo ?? {}).some(id => IDS.includes(id)),
+      'no move target reaches a denied channel')
     assert(!(providers.plugins ?? []).some(row => spellings.test(JSON.stringify(row))),
-      'no plugin row offers workbuddy-ai')
+      'no plugin row offers a denied channel')
     assert(!(providers.unmoved ?? []).some(row => spellings.test(JSON.stringify(row))),
-      'no retired workbuddy-ai built-in is offered')
-    // The deprecation list stays whole: the add sheet reads it to hide the
-    // built-in tile, and dropping an id would surface that tile again.
-    assert(IDS.every(id => providers.movable.includes(id)), 'movable keeps the denied id')
+      'no retired denied built-in is offered')
+    // The deprecation list stays whole: the add sheet reads it to hide a
+    // built-in tile, and dropping an id would surface that tile again. Only
+    // the denied channels that were built-ins appear here; the four channels
+    // removed from the channel pack were never built-ins.
+    assert(IDS.some(id => providers.movable.includes(id)), 'movable keeps the denied built-ins')
 
-    // Every spelling of the international channel is refused where a mutation
-    // could enable one.
+    // Every denied id and every spelling is refused where a mutation could
+    // enable one.
     for (const spec of [INTL_PACKAGE, '@magpie-community/opencode-workbuddy_ai-auth',
-      '@magpie-community/opencode-workbuddy ai-auth']) {
+      '@magpie-community/opencode-workbuddy ai-auth',
+      ...IDS.map(id => `@magpie-community/opencode-${id}-auth`)]) {
       assert(await denied('POST', '/api/plugins/add', { spec }), `${spec} add is refused`)
     }
-    for (const [route, body] of [
-      ['/api/plugins/add', { spec: INTL_PACKAGE }],
-      ['/api/plugins/upgrade', { spec: INTL_PACKAGE }],
-      ['/api/plugins/off', { spec: INTL_PACKAGE, off: false }],
-      ['/api/plugin-signin', { provider: 'workbuddy-ai', method: 0 }],
-      ['/api/plugin-signin/prompt', { provider: 'workbuddy-ai', method: 0 }],
-      ['/api/signin', { agent: 'workbuddy-ai' }],
-      ['/api/signin/import', { agent: 'workbuddy-ai' }],
-      ['/api/login/use', { agent: 'workbuddy-ai', user: 'fixture' }],
-      ['/api/provider/move', { id: 'workbuddy-ai' }],
-      ['/api/provider/save', { preset: 'workbuddy-ai', key: 'fixture' }],
-      ['/api/provider/save', { id: 'workbuddy-ai', name: 'WorkBuddy AI', key: 'fixture' }],
-    ]) assert(await denied('POST', route, body), `${route} ${JSON.stringify(body)} is refused`)
+    for (const id of IDS) {
+      for (const [route, body] of [
+        ['/api/plugins/add', { spec: `@magpie-community/opencode-${id}-auth` }],
+        ['/api/plugins/upgrade', { spec: `@magpie-community/opencode-${id}-auth` }],
+        ['/api/plugins/off', { spec: `@magpie-community/opencode-${id}-auth`, off: false }],
+        ['/api/plugin-signin', { provider: id, method: 0 }],
+        ['/api/plugin-signin/prompt', { provider: id, method: 0 }],
+        ['/api/signin', { agent: id }],
+        ['/api/signin/import', { agent: id }],
+        ['/api/login/use', { agent: id, user: 'fixture' }],
+        ['/api/provider/move', { id }],
+        ['/api/provider/save', { preset: id, key: 'fixture' }],
+        ['/api/provider/save', { id, name: id, key: 'fixture' }],
+      ]) assert(await denied('POST', route, body), `${route} ${JSON.stringify(body)} is refused`)
+    }
   })
 
   await check('restored channels are not refused on install, login or preset save', async () => {
@@ -245,57 +266,65 @@ try {
     assert.doesNotThrow(() => assertEngineMutation('POST', '/api/provider/save', { preset: 'moonshot-cn', key: 'fixture', name: 'unrelated' }))
   })
 
-  await engineCheck('the import picker keeps restored channels and drops only the international one', async () => {
+  await engineCheck('the import picker keeps restored channels and drops all denied ones', async () => {
     const sources = await read('api/importapps')
     for (const source of sources) {
-      assert(!(source.items || []).some(item => INTERNATIONAL.test(item?.provider?.id)), source.id)
-      assert(!mentionsInternational(source), `${source.id} must not name workbuddy-ai`)
+      assert(!(source.items || []).some(item => IDS.includes(item?.provider?.id)), source.id)
+      assert(!mentionsDenied(source), `${source.id} must not name a denied channel`)
     }
     assert(sources.length > 0, 'import sources stay reachable')
   })
 
-  await engineCheck('the engine refuses to install, enable or sign in the international channel', async () => {
-    assert(await denied('POST', '/api/plugins/add', { spec: INTL_PACKAGE }), 'add')
-    assert(await denied('POST', '/api/plugins/upgrade', { spec: INTL_PACKAGE }), 'upgrade')
-    assert(await denied('POST', '/api/plugins/off', { spec: INTL_PACKAGE, off: false }), 're-enable')
-    assert(await denied('POST', '/api/plugin-signin', { provider: 'workbuddy-ai', method: 0 }), 'plugin sign-in')
-    assert(await denied('POST', '/api/plugin-signin/prompt', { provider: 'workbuddy-ai', method: 0 }), 'plugin prompt')
-    assert(await denied('POST', '/api/signin', { agent: 'workbuddy-ai' }), 'subscription sign-in')
-    assert(await denied('POST', '/api/login/use', { agent: 'workbuddy-ai', user: 'fixture' }), 'account switch')
-    assert(await denied('POST', '/api/provider/move', { id: 'workbuddy-ai' }), 'move')
+  await engineCheck('the engine refuses to install, enable or sign in any denied channel', async () => {
+    for (const id of IDS) {
+      const spec = `@magpie-community/opencode-${id}-auth`
+      assert(await denied('POST', '/api/plugins/add', { spec }), `${id} add`)
+      assert(await denied('POST', '/api/plugins/upgrade', { spec }), `${id} upgrade`)
+      assert(await denied('POST', '/api/plugins/off', { spec, off: false }), `${id} re-enable`)
+      assert(await denied('POST', '/api/plugin-signin', { provider: id, method: 0 }), `${id} plugin sign-in`)
+      assert(await denied('POST', '/api/plugin-signin/prompt', { provider: id, method: 0 }), `${id} plugin prompt`)
+      assert(await denied('POST', '/api/signin', { agent: id }), `${id} subscription sign-in`)
+      assert(await denied('POST', '/api/login/use', { agent: id, user: 'fixture' }), `${id} account switch`)
+      assert(await denied('POST', '/api/provider/move', { id }), `${id} move`)
+    }
   })
 
   await engineCheck('the way out of an earlier install is left open', async () => {
     // Hiding the channel must not trap a plugin installed before this change:
     // switching it off and removing it are not refused by policy (the engine
     // answers for a plugin it doesn't have, which is a different failure).
-    for (const [route, body] of [
-      ['/api/plugins/off', { spec: INTL_PACKAGE, off: true }],
-      ['/api/plugins/remove', { spec: INTL_PACKAGE }],
-    ]) {
-      try {
-        const response = await engine.request('POST', route, { body })
-        assert.notEqual(response.status, 403, route)
-        await response.text()
-      } catch (error) {
-        assert.notEqual(error.message, POLICY_REFUSED, route)
+    for (const spec of [INTL_PACKAGE, ...IDS.map(id => `@magpie-community/opencode-${id}-auth`)]) {
+      for (const [route, body] of [
+        ['/api/plugins/off', { spec, off: true }],
+        ['/api/plugins/remove', { spec }],
+      ]) {
+        try {
+          const response = await engine.request('POST', route, { body })
+          assert.notEqual(response.status, 403, route)
+          await response.text()
+        } catch (error) {
+          assert.notEqual(error.message, POLICY_REFUSED, route)
+        }
       }
     }
   })
 
   await engineCheck('the refusal is enforced through the browser proxy too', async () => {
-    for (const [route, body] of [
-      ['api/plugins/add', { spec: INTL_PACKAGE }],
-      ['api/signin', { agent: 'workbuddy-ai' }],
-      ['api/plugin-signin', { provider: 'workbuddy-ai', method: 0 }],
-      ['api/provider/move', { id: 'workbuddy-ai' }],
-    ]) {
-      const response = await post(route, body)
-      assert.equal(response.status, 403, route)
-      assert.match(await response.text(), /not offered by this build/, route)
+    for (const id of IDS) {
+      const spec = `@magpie-community/opencode-${id}-auth`
+      for (const [route, body] of [
+        ['api/plugins/add', { spec }],
+        ['api/signin', { agent: id }],
+        ['api/plugin-signin', { provider: id, method: 0 }],
+        ['api/provider/move', { id }],
+      ]) {
+        const response = await post(route, body)
+        assert.equal(response.status, 403, `${route} ${id}`)
+        assert.match(await response.text(), /not offered by this build/, `${route} ${id}`)
+      }
+      const page = await fetch(base + 'api/plugins/page?name=' + encodeURIComponent(spec))
+      assert.equal(page.status, 403, `${id} detail page`)
     }
-    const page = await fetch(base + 'api/plugins/page?name=' + encodeURIComponent(INTL_PACKAGE))
-    assert.equal(page.status, 403)
   })
 
   await engineCheck('unrelated work on the same routes still reaches the engine', async () => {
@@ -309,7 +338,7 @@ try {
     assert.equal(typeof settings.noAccountDiscovery, 'boolean', 'settings still answered')
   })
 
-  await engineCheck('a model served through the international channel never reaches the published catalog', async () => {
+  await engineCheck('a model served through a denied channel never reaches the published catalog', async () => {
     const models = createMagpieModels({
       engine,
       stats: { record() {} },
@@ -321,13 +350,17 @@ try {
       assert.equal(deniedModel({ id: 'workbuddy-ai/glm-5.3-flash', owned_by: 'x' }), true, 'by id')
       assert.equal(deniedModel({ id: 'workbuddy_ai/glm-5.3-flash', owned_by: 'x' }), true, 'underscored id')
       assert.equal(deniedModel({ id: 'workbuddy ai/glm-5.3-flash', owned_by: 'x' }), true, 'spaced id')
-      for (const owned_by of ['workbuddy', 'codebuddy', 'huaweicloud', 'codearts']) {
+      for (const id of IDS.slice(1)) {
+        assert.equal(deniedModel({ id: 'glm-5.3-flash', owned_by: id }), true, `${id} provider`)
+        assert.equal(deniedModel({ id: `${id}/glm-5.3-flash`, owned_by: 'x' }), true, `${id} id`)
+      }
+      for (const owned_by of ['workbuddy', 'codebuddy', 'buddy', 'codebuddy-cn', 'huaweicloud', 'codearts']) {
         assert.equal(deniedModel({ id: 'glm-5.3-flash', owned_by }), false, `${owned_by} stays`)
       }
       assert.equal(deniedModel({ id: 'codearts/glm-5.3-flash', owned_by: 'x' }), false, 'codearts id stays')
       assert.equal(deniedModel({ id: 'gpt-6.1-sol', owned_by: 'codex' }), false, 'others stay')
       await models.refresh()
-      assert(!mentionsInternational(models.catalog()), 'published catalog excludes only workbuddy-ai')
+      assert(!mentionsDenied(models.catalog()), 'published catalog excludes all denied channels')
     } finally { models.close() }
   })
 
@@ -340,11 +373,14 @@ try {
     ] }
     const filtered = filterEngineJSON('/api/plugins/listings', structuredClone(listings))
     assert.deepEqual(filtered.listings.map(row => row.package),
-      [CODEARTS_PACKAGE, CHINA_PACKAGE, '@magpie-community/opencode-zcode-auth'],
-      'only the international listing is dropped')
+      [CODEARTS_PACKAGE, CHINA_PACKAGE],
+      'the international and zcode listings are dropped')
     const unknown = { anything: 1 }
     assert.equal(filterEngineJSON('/api/settings', unknown), unknown, 'other routes pass through')
-    assert.throws(() => assertEngineMutation('POST', '/api/plugins/add', { spec: INTL_PACKAGE }), /not offered/)
+    for (const id of IDS) {
+      assert.throws(() => assertEngineMutation('POST', '/api/plugins/add', { spec: `@magpie-community/opencode-${id}-auth` }), /not offered/)
+      assert.throws(() => assertEngineMutation('POST', '/api/signin', { agent: id }), /not offered/)
+    }
     assert.doesNotThrow(() => assertEngineMutation('POST', '/api/plugins/add', { spec: CHINA_PACKAGE }))
     assert.doesNotThrow(() => assertEngineMutation('POST', '/api/plugins/add', { spec: CODEARTS_PACKAGE }))
     assert.doesNotThrow(() => assertEngineMutation('GET', '/api/plugins/add', { spec: INTL_PACKAGE }))
@@ -378,10 +414,13 @@ try {
     })
     assert.equal(npm.npm[agentOffice.package].description.includes('workbuddy ai'), false, 'npm prose is rewritten too')
     assert.match(npm.npm[agentOffice.package].description, /CodeBuddy, Huawei Cloud CodeArts/)
-    // Id-bearing surfaces stay untouched: the deprecation list needs exact ids.
+    // The deprecation list keeps exact ids (even denied ones); a denied preset,
+    // being the way onto the channel, is filtered out.
     const providers = { movable: ['workbuddy', 'workbuddy-ai', 'codearts', 'zcode'], presets: [{ id: 'zcode', name: 'ZCode' }] }
-    assert.deepEqual(filterEngineJSON('/api/providers', structuredClone(providers)).movable,
+    const filteredProviders = filterEngineJSON('/api/providers', structuredClone(providers))
+    assert.deepEqual(filteredProviders.movable,
       ['workbuddy', 'workbuddy-ai', 'codearts', 'zcode'], 'provider ids are not redacted')
+    assert.deepEqual(filteredProviders.presets, [], 'the zcode preset is filtered')
   })
 
   await check('the disclaimer names only the international channel and states the restored ones', async () => {

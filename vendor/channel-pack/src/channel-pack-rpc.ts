@@ -273,7 +273,7 @@ function shortId(): string {
  * 便于事后发现是哪个客户端在发怪值。
  *
  * @param raw 客户端自报的渠道（可能未登记）
- * @returns 可安全交给 `zcode.startLogin` 的渠道
+ * @returns 可安全交给 `zcode!.startLogin` 的渠道
  */
 export function normalizeZcodeLoginProvider(raw: string | undefined): ZcodeLoginProvider {
   if (raw === 'zai') return 'zai'
@@ -820,16 +820,16 @@ export function registerChannelPackRpc(
   ctx: Context,
   pool: AccountPool,
   lobsterai: LobsteraiAuth,
-  qoder: QoderAuth,
+  qoder: QoderAuth | undefined,
   /** Qoder **中国版**实例（与 `qoder` 同协议、不同 product；RPC 分支按注册表分派）。 */
-  qoderCn: QoderAuth,
+  qoderCn: QoderAuth | undefined,
   trae: TraeAuth,
   cline: ClineAuth,
   loomy: LoomyAuth,
-  raccoon: RaccoonAuth,
+  raccoon: RaccoonAuth | undefined,
   /** MiniMax Code **中国版**实例（OAuth 设备码 + PKCE，与 Qoder 同型但协议不同）。 */
   minimax: MinimaxAuth,
-  zcode: ZcodeAuth,
+  zcode: ZcodeAuth | undefined,
   /**
    * Gemini（Google Cloud Code Assist 免费线）实例（本地回调 OAuth）。
    *
@@ -961,14 +961,14 @@ function registerChannelPackEndpoints(
   ctx: Context,
   pool: AccountPool,
   lobsterai: LobsteraiAuth,
-  qoder: QoderAuth,
-  qoderCn: QoderAuth,
+  qoder: QoderAuth | undefined,
+  qoderCn: QoderAuth | undefined,
   trae: TraeAuth,
   cline: ClineAuth,
   loomy: LoomyAuth,
-  raccoon: RaccoonAuth,
+  raccoon: RaccoonAuth | undefined,
   minimax: MinimaxAuth,
-  zcode: ZcodeAuth,
+  zcode: ZcodeAuth | undefined,
   gemini: GeminiAuth,
   modelAdapters?: Readonly<Record<string, ModelCatalogSource>>,
   config: ChannelPackRpcConfig = {},
@@ -990,10 +990,11 @@ function registerChannelPackEndpoints(
     readonly product: QoderProduct
     readonly auth: QoderAuth
   }
-  const qoderFamily: readonly QoderFamilyMember[] = [
-    { product: QODER, auth: qoder },
-    { product: QODER_CN, auth: qoderCn },
-  ]
+  // The four channels are removed in this fork; qoder/qoderCn are passed as
+  // undefined at the call site, so the family table is intentionally empty.
+  const qoderFamily: readonly QoderFamilyMember[] = qoder === undefined || qoderCn === undefined
+    ? []
+    : [{ product: QODER, auth: qoder }, { product: QODER_CN, auth: qoderCn }]
   /** 该 provider 是否属于 Qoder 同族（国际版或中国版）。 */
   const isQoderFamily = (provider: string): boolean =>
     qoderFamily.some((member) => member.product.id === provider)
@@ -1143,7 +1144,7 @@ function registerChannelPackEndpoints(
    */
   async function carrierCaptchaConfig(): Promise<ZcodeCaptchaConfig> {
     try {
-      const remote = await zcode.fetchCaptchaConfig()
+      const remote = await zcode?.fetchCaptchaConfig()
       return remote ?? ZCODE_CAPTCHA_FALLBACK
     } catch {
       return ZCODE_CAPTCHA_FALLBACK
@@ -1678,7 +1679,7 @@ function registerChannelPackEndpoints(
 
           let raccoonStarted: StartedRaccoonLoginFlow
           try {
-            raccoonStarted = await raccoon.startLogin()
+            raccoonStarted = await raccoon!.startLogin()
           } catch (error) {
             // 起本地服务器失败：删掉占位条目，不留幽灵账号。
             void pool.removeAccount(id).catch(() => {})
@@ -1687,7 +1688,7 @@ function registerChannelPackEndpoints(
           }
 
           raccoonStarted.result.then(async (credential) => {
-            const result = await raccoon.persistLogin(credential, { refName })
+            const result = await raccoon!.persistLogin(credential, { refName })
             const saved = JSON.parse(result.access) as RaccoonCredential
             await pool.updateAccount(id, {
               // ⚠️ 服务端的 `name` 是**自动生成的默认名**（本机账号是
@@ -1772,14 +1773,14 @@ function registerChannelPackEndpoints(
            *
            * 早先有两道「先复用本机已有账号」的短路（孤儿条目收编 + 同 `user_id`
            * 去重返回），它们依赖解密 `~/.zcode/v2/credentials.json` ——
-           * **已整体删除**（理由见 `src/zcode.ts` 文件头）。⇒ 现在点「添加账号」
+           * **已整体删除**（理由见 `src/zcode!.ts` 文件头）。⇒ 现在点「添加账号」
            * **一律**新起一轮 OAuth。
            *
            * ⚠ 「点一次多一条」仍由**登录成功后**的去重兜住（下方
            * `loginResult` 分支里的 `findAccountIdByIdentityField`）——
            * 判据是插件自己拿到的 `user_id`，不再依赖本机文件。
            */
-          const started = await zcode.startLogin({
+          const started = await zcode!.startLogin({
             refName,
             // ⚠️ 缺省 `'bigmodel'`（既有行为不变）；`'zai'` 走 chat.z.ai 国际版。
             // ⚠️ 必须过白名单（真实修复，Gitee issue IKJLK3 E2）：`req` 是**客户端
@@ -2030,7 +2031,7 @@ function registerChannelPackEndpoints(
               // ⚠️ **必须传 pool + entry.id**：续期后要把新的 `expiresAt` 写回
               // 账号池，否则 UI 一直显示「已过期」（真实缺陷：JWT 已续到 15:09、
               // 账号池仍是 12:02，相差 3.1 小时，但功能完全正常）。
-              await raccoon.refreshAccountCredential(entry.credentialRef, pool, entry.id)
+              await raccoon!.refreshAccountCredential(entry.credentialRef, pool, entry.id)
               break
             case MINIMAX.id:
               // MiniMax **有** refresh 端点（`/oauth2/token` 的 refresh_token 授权），
@@ -2046,7 +2047,7 @@ function registerChannelPackEndpoints(
                * 用户重新登录后重新调用 `account.refresh` 即可生效而无需重启 DSH。
                * 凭据不可用时如实抛错（引导用户重新登录该账号）。
                */
-              await zcode.refreshAccountCredential(entry.credentialRef, pool, entry.id)
+              await zcode!.refreshAccountCredential(entry.credentialRef, pool, entry.id)
               break
             case GEMINI.id:
               // Gemini **有** refresh 端点（`oauth2.googleapis.com/token` 的
@@ -2242,7 +2243,7 @@ function registerChannelPackEndpoints(
           // 把它映射成 Loomy 那套「任务」形状的一项，复用同一个 RPC 与 UI。
           // ⚠️ 已领状态靠**账单反查**（服务端没有单独的状态端点）。
           const credential = JSON.parse(resolved.value) as RaccoonCredential
-          const status = await raccoon.fetchOnboardingStatus(credential)
+          const status = await raccoon!.fetchOnboardingStatus(credential)
           return {
             ok: true,
             value: {
@@ -2356,7 +2357,7 @@ function registerChannelPackEndpoints(
           // 「✅ 1 个此前已完成 / 累计已领 0 / 3000」—— **自相矛盾**：
           // 既然「此前已完成」，那 3000 分显然已经拿到手了。
           const credential = JSON.parse(resolved.value) as RaccoonCredential
-          const outcome = await raccoon.claimLoginReward(credential)
+          const outcome = await raccoon!.claimLoginReward(credential)
           if (outcome.kind === 'failed') {
             return { ok: false, error: { code: 'bad-request', message: outcome.message } }
           }
@@ -2369,7 +2370,7 @@ function registerChannelPackEndpoints(
           // 只读 GET，且仅在「点按钮时已领」这一低频路径上发生。
           const points = outcome.kind === 'claimed'
             ? outcome.credit
-            : (await raccoon.fetchOnboardingStatus(credential)).points
+            : (await raccoon!.fetchOnboardingStatus(credential)).points
           return {
             ok: true,
             value: {
@@ -2790,8 +2791,8 @@ function registerChannelPackEndpoints(
                  * 「一键领取」100% 失败（用户报障：15/15 全部 captcha 校验失败）。
                  * 现在配置由 `claimDailyWith` 解析一次并传进来，两边天然同源。
                  */
-                accountOutcomes = await zcode.claimDailyFor(credential, async (config) => {
-                  return await zcode.mintCaptcha(config)
+                accountOutcomes = await zcode!.claimDailyFor(credential, async (config) => {
+                  return await zcode!.mintCaptcha(config)
                 })
               }
             }
@@ -3153,7 +3154,7 @@ function registerChannelPackEndpoints(
               })
               continue
             }
-            const balance = await raccoon.fetchCreditBalance(credential)
+            const balance = await raccoon!.fetchCreditBalance(credential)
             values.push({
               accountId: account.id,
               nickname: account.nickname,
@@ -3194,7 +3195,7 @@ function registerChannelPackEndpoints(
               })
               continue
             }
-            const result = await zcode.fetchBalanceFor(credential)
+            const result = await zcode!.fetchBalanceFor(credential)
             if (result === undefined) {
               values.push({
                 accountId: account.id, nickname: account.nickname,
@@ -3900,8 +3901,8 @@ function registerChannelPackEndpoints(
       case 'captcha.carrierUrl': {
         // ⚠ 判一下方法存不存在：这条 RPC 允许「没有内部载体能力」的宿主形态（老插件
         //   骨架 / 替身）回答，**回 null 即可**，不该把整次分派变成错误。
-        const url = typeof zcode.carrierPageUrl === 'function'
-          ? await zcode.carrierPageUrl()
+        const url = typeof zcode?.carrierPageUrl === 'function'
+          ? await zcode!.carrierPageUrl()
           : null
         const value: RpcCaptchaCarrierUrlResponse = { url: url ?? null }
         return { ok: true, value }
