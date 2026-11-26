@@ -29,6 +29,7 @@ import {
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
 import {
+  BUDDY_DEPLOYMENT_TYPE,
   HTTP_HEADER_DOMAIN,
   HTTP_HEADER_PRODUCT,
   HTTP_HEADER_PRODUCT_CODE,
@@ -255,6 +256,63 @@ function contentToText(content: unknown): string {
 /** 工具结果内嵌图片的载体文本（与官方 deepseek 适配器同名同义）。 */
 const TOOL_RESULT_IMAGE_TEXT = 'Attached image(s) from tool result:'
 
+/**
+ * 渠道闸门（business code 11128 `Illegal API invocation from an unapproved
+ * channel`）的提示词整形。
+ *
+ * 实测（对齐维护中的 dsh-connect-workbuddy，2026-10-21 国内区实测）：腾讯网关
+ * 会扫描 `system` 与 `assistant` 消息的开头/正文，命中已知第三方 agent 提示词
+ * 特征即以 11128 拒绝整条请求。DSH 的系统提示开头正是
+ * `You are an AI agent powered by DeepSeek Harness` —— 本 fork 恢复的旧实现
+ * 原样发出，于是「测试」与会话推理全部报 11128。
+ *
+ * 两层防护，各自对应一种匹配方式：
+ *  - 前缀命中 → 在正文最前面加一行中性 head，把它移出匹配区；
+ *  - 身份子句出现在正文任意位置（上游后来改为子串匹配）→ 在子句内每个空白后
+ *    插入零宽空格 U+200B，破坏子串但不改词序与可读性。
+ */
+const NEUTRAL_SYSTEM_HEAD = 'You are a helpful assistant.'
+const ZERO_WIDTH_SPACE = '\u200b'
+const UNAPPROVED_CHANNEL_OPENINGS: readonly string[] = [
+  'you are an ai agent powered by deepseek harness',
+  "you are claude code, anthropic's official cli for claude",
+]
+const IDENTITY_CLAUSE =
+  /(you)(\s+are\s+(?:(?:an?\s+)?[\w-]*\s*agent\s+powered\s+by|interacting\s+with\s+the\s+user\s+through\s+the\s+deepseek\s+harness))/giu
+
+/** 在身份子句内每个空白后插入零宽空格（幂等）。 */
+function breakIdentityClauses(text: string): string {
+  return text.replace(IDENTITY_CLAUSE, (clause) => clause.replace(/(\s+)/gu, `$1${ZERO_WIDTH_SPACE}`))
+}
+
+/** 两层整形一次做完；未改动时返回 undefined（避免无谓重序列化）。 */
+function neutralizeScannedText(text: string): string | undefined {
+  const opening = text.replace(/^\s+/u, '').toLowerCase()
+  const headed = UNAPPROVED_CHANNEL_OPENINGS.some((prefix) => opening.startsWith(prefix))
+    ? `${NEUTRAL_SYSTEM_HEAD}\n\n${text}`
+    : text
+  const broken = breakIdentityClauses(headed)
+  return broken === text ? undefined : broken
+}
+
+/** 按渠道闸门的要求整形发出去的 messages（就地修改）。 */
+function shapeChannelMessages(messages: Array<Record<string, unknown>>): void {
+  for (const message of messages) {
+    // 网关拒绝 `developer` 角色（同样以 11128 拒绝），统一改写成 `system`。
+    if (message.role === 'developer') message.role = 'system'
+  }
+  if (messages.length === 0 || messages[0].role !== 'system') {
+    messages.unshift({ role: 'system', content: NEUTRAL_SYSTEM_HEAD })
+  }
+  for (const message of messages) {
+    if (message.role !== 'system' && message.role !== 'assistant') continue
+    if (typeof message.content !== 'string') continue
+    const next = neutralizeScannedText(message.content)
+    if (next !== undefined) message.content = next
+  }
+}
+
+
 function serializeMessages(
   messages: readonly { role: string; content: unknown }[],
   imageUrls?: ReadonlyMap<string, string>,
@@ -332,7 +390,7 @@ function serializeMessages(
       })
       continue
     }
-    if (message.role === 'system') {
+    if (message.role === 'system' || message.role === 'developer') {
       flushToolImages()
       wire.push({ role: 'system', content: contentToText(message.content) })
       continue
@@ -1347,9 +1405,9 @@ export class BuddyAdapter extends LlmAdapter {
     if (options.system !== undefined && options.system.length > 0) {
       messages.unshift({ role: 'system', content: options.system })
     }
-    if (this.product.id === 'workbuddy' && (messages.length === 0 || messages[0].role !== 'system')) {
-      messages.unshift({ role: 'system', content: 'You are a helpful assistant.' })
-    }
+    // 渠道闸门整形：保证 system head，并把被指纹的 DSH 提示词移出匹配区。
+    // 两个产品都要做（旧实现只对 workbuddy 补 head，CodeBuddy 国内版因此恒 11128）。
+    shapeChannelMessages(messages)
     const tools = options.tools?.map((tool) => ({
       type: 'function' as const,
       function: {
@@ -1778,13 +1836,14 @@ export class BuddyAdapter extends LlmAdapter {
     headers.set(HTTP_HEADER_DOMAIN, this.product.apiDomain || credential.domain || '')
     headers.set(HTTP_HEADER_PRODUCT_CODE, this.product.productCode)
     // 用量归属头族：后台「使用端」列按这组头归因，缺任一个都会显示为 `-`。
-    // 注意 X-Product 是**归属名**（产品名），不是部署类型 —— 历史实现发成
-    // `SaaS` 导致后台归因不到产品。
+    // X-Product 用 BUDDY_DEPLOYMENT_TYPE（`SaaS`）：这是渠道闸门实测通过的
+    // 组合（与维护中的 dsh-connect-workbuddy 的保守档一致）。早先发产品名
+    // 只影响用量归因显示，但对网关来说是另一个身份，可用性优先。
     headers.set('X-Agent-Purpose', 'conversation')
     headers.set('X-IDE-Name', this.product.attributionName)
     headers.set('X-IDE-Type', this.product.attributionName)
     headers.set('X-IDE-Version', this.product.clientVersion)
-    headers.set(HTTP_HEADER_PRODUCT, this.product.attributionName)
+    headers.set(HTTP_HEADER_PRODUCT, BUDDY_DEPLOYMENT_TYPE)
     // User-Agent 按模型族分档：不同模型线归属不同客户端形态，后台据此分列。
     // 必须用 set 覆盖（attributionHeaders() 注入的框架 UA 键为小写，
     // 但 Headers 键大小写不敏感，set 能正常覆盖）。

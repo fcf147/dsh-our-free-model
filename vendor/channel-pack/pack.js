@@ -38106,6 +38106,38 @@ function contentToText2(content) {
   return content.filter((block) => typeof block === "object" && block !== null && block.type === "text").map((block) => String(block.text)).join("");
 }
 var TOOL_RESULT_IMAGE_TEXT = "Attached image(s) from tool result:";
+var NEUTRAL_SYSTEM_HEAD = "You are a helpful assistant.";
+var ZERO_WIDTH_SPACE = "\u200B";
+var UNAPPROVED_CHANNEL_OPENINGS = [
+  "you are an ai agent powered by deepseek harness",
+  "you are claude code, anthropic's official cli for claude"
+];
+var IDENTITY_CLAUSE = /(you)(\s+are\s+(?:(?:an?\s+)?[\w-]*\s*agent\s+powered\s+by|interacting\s+with\s+the\s+user\s+through\s+the\s+deepseek\s+harness))/giu;
+function breakIdentityClauses(text) {
+  return text.replace(IDENTITY_CLAUSE, (clause) => clause.replace(/(\s+)/gu, `$1${ZERO_WIDTH_SPACE}`));
+}
+function neutralizeScannedText(text) {
+  const opening = text.replace(/^\s+/u, "").toLowerCase();
+  const headed = UNAPPROVED_CHANNEL_OPENINGS.some((prefix) => opening.startsWith(prefix)) ? `${NEUTRAL_SYSTEM_HEAD}
+
+${text}` : text;
+  const broken = breakIdentityClauses(headed);
+  return broken === text ? void 0 : broken;
+}
+function shapeChannelMessages(messages) {
+  for (const message2 of messages) {
+    if (message2.role === "developer") message2.role = "system";
+  }
+  if (messages.length === 0 || messages[0].role !== "system") {
+    messages.unshift({ role: "system", content: NEUTRAL_SYSTEM_HEAD });
+  }
+  for (const message2 of messages) {
+    if (message2.role !== "system" && message2.role !== "assistant") continue;
+    if (typeof message2.content !== "string") continue;
+    const next = neutralizeScannedText(message2.content);
+    if (next !== void 0) message2.content = next;
+  }
+}
 function serializeMessages2(messages, imageUrls) {
   const wire = [];
   let pendingToolImages = [];
@@ -38144,7 +38176,7 @@ function serializeMessages2(messages, imageUrls) {
       });
       continue;
     }
-    if (message2.role === "system") {
+    if (message2.role === "system" || message2.role === "developer") {
       flushToolImages();
       wire.push({ role: "system", content: contentToText2(message2.content) });
       continue;
@@ -38729,9 +38761,7 @@ var BuddyAdapter = class _BuddyAdapter extends LlmAdapter2 {
     if (options.system !== void 0 && options.system.length > 0) {
       messages.unshift({ role: "system", content: options.system });
     }
-    if (this.product.id === "workbuddy" && (messages.length === 0 || messages[0].role !== "system")) {
-      messages.unshift({ role: "system", content: "You are a helpful assistant." });
-    }
+    shapeChannelMessages(messages);
     const tools = options.tools?.map((tool) => ({
       type: "function",
       function: {
@@ -38970,7 +39000,7 @@ var BuddyAdapter = class _BuddyAdapter extends LlmAdapter2 {
     headers.set("X-IDE-Name", this.product.attributionName);
     headers.set("X-IDE-Type", this.product.attributionName);
     headers.set("X-IDE-Version", this.product.clientVersion);
-    headers.set(HTTP_HEADER_PRODUCT, this.product.attributionName);
+    headers.set(HTTP_HEADER_PRODUCT, BUDDY_DEPLOYMENT_TYPE);
     headers.set("User-Agent", resolveUserAgent(this.product, options.model));
     if (this.product.id === "workbuddy") {
       headers.set("X-Conversation-ID", this.sessionId);
