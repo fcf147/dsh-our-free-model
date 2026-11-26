@@ -32377,7 +32377,6 @@ import Schema2 from "@deepseek-ai/schemastery";
 
 // vendor/channel-pack/src/llm-adapter.ts
 import {
-  attributionHeaders,
   CONTEXT_WINDOW_EXCEEDED_CODE,
   isContextWindowExceededError,
   isQuotaExceededError,
@@ -36624,7 +36623,7 @@ var CodeArtsAdapter = class extends LlmAdapter {
         new TextEncoder().encode(body),
         extraSignedHeaders
       );
-      const headers = new Headers(attributionHeaders());
+      const headers = new Headers({ "user-agent": "ai-sdk/provider-utils/4.0.21 runtime/node/24" });
       signed.forEach((value, key) => {
         if (key !== "content-type") headers.set(key, value);
       });
@@ -37182,7 +37181,7 @@ function parseRateLimitError(body, currentModel, status) {
 
 // vendor/channel-pack/src/buddy-adapter.ts
 import {
-  attributionHeaders as attributionHeaders2,
+  attributionHeaders,
   CONTEXT_WINDOW_EXCEEDED_CODE as CONTEXT_WINDOW_EXCEEDED_CODE2,
   isContextWindowExceededError as isContextWindowExceededError2,
   LlmAdapter as LlmAdapter2,
@@ -38961,7 +38960,7 @@ var BuddyAdapter = class _BuddyAdapter extends LlmAdapter2 {
   }
   /** 发起一次 chat 请求；网络失败映射为可重试的 TRANSPORT 错误。 */
   async send(credential, body, options) {
-    const headers = new Headers(attributionHeaders2());
+    const headers = new Headers(attributionHeaders());
     headers.set("Authorization", `Bearer ${credential.access_token}`);
     headers.set("Accept", "text/event-stream");
     headers.set("Content-Type", "application/json");

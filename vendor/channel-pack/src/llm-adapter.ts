@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import {
-  attributionHeaders, CONTEXT_WINDOW_EXCEEDED_CODE, isContextWindowExceededError,
+  CONTEXT_WINDOW_EXCEEDED_CODE, isContextWindowExceededError,
   isQuotaExceededError, LlmAdapter, LlmError, QUOTA_EXCEEDED_CODE,
 } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
@@ -1168,7 +1168,12 @@ export class CodeArtsAdapter extends LlmAdapter {
         new TextEncoder().encode(body),
         extraSignedHeaders,
       )
-      const headers = new Headers(attributionHeaders())
+      // FORK FIX: do NOT send the host's own UA to the CodeArts gateway. The
+      // Huawei gateway now rejects requests whose user-agent identifies the
+      // harness (verified live: harness UA -> HTTP 403 TM.00000001 "网络繁忙",
+      // neutral UA -> HTTP 200 with real content, same signed request). The
+      // maintained dsh-connect-codearts plugin likewise sends a neutral SDK UA.
+      const headers = new Headers({ 'user-agent': 'ai-sdk/provider-utils/4.0.21 runtime/node/24' })
       // 签名 map 中的额外头（如 maas_type）必须随请求发送——它们已参与
       // canonical 计算、包含在 SignedHeaders 列表中，缺失会导致服务端验签失败。
       signed.forEach((value, key) => { if (key !== 'content-type') headers.set(key, value) })
