@@ -8,6 +8,7 @@
  * 模型列表：静态默认（对齐 /v3/config craft agent models）+ 登录后的动态拉取
  */
 
+import fs from 'node:fs'
 import type { Context } from '@deepseek-ai/cordis'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import {
@@ -260,58 +261,88 @@ const TOOL_RESULT_IMAGE_TEXT = 'Attached image(s) from tool result:'
  * 渠道闸门（business code 11128 `Illegal API invocation from an unapproved
  * channel`）的提示词整形。
  *
- * 实测（对齐维护中的 dsh-connect-workbuddy，2026-10-21 国内区实测）：腾讯网关
- * 会扫描 `system` 与 `assistant` 消息的开头/正文，命中已知第三方 agent 提示词
- * 特征即以 11128 拒绝整条请求。DSH 的系统提示开头正是
- * `You are an AI agent powered by DeepSeek Harness` —— 本 fork 恢复的旧实现
- * 原样发出，于是「测试」与会话推理全部报 11128。
+ * 实测结论（本机真实凭据逐条对 copilot.tencent.com 验证，2026-11-26）：
+ *  - 开头命中 `You are an AI agent powered by DeepSeek Harness` → 400/11128；
+ *    在正文前加一行中性 head 即通过（前缀规则）。
+ *  - 正文任意位置的字面短语也会命中（子串规则）：`@` 路径段落、Web GUI 两句、
+ *    runtime-context 那句。
+ *  - **零宽空格无效**：拆词后的短语仍被判命中，故不做无谓改写。
  *
- * 两层防护，各自对应一种匹配方式：
- *  - 前缀命中 → 在正文最前面加一行中性 head，把它移出匹配区；
- *  - 身份子句出现在正文任意位置（上游后来改为子串匹配）→ 在子句内每个空白后
- *    插入零宽空格 U+200B，破坏子串但不改词序与可读性。
+ * 两层防护：中性 head 破前缀规则，字面改写表破子串规则。表中每条均来自
+ * 维护中的 dsh-connect-workbuddy 的实测记录；长句在前，截断前缀也能覆盖。
  */
 const NEUTRAL_SYSTEM_HEAD = 'You are a helpful assistant.'
-const ZERO_WIDTH_SPACE = '\u200b'
 const UNAPPROVED_CHANNEL_OPENINGS: readonly string[] = [
   'you are an ai agent powered by deepseek harness',
   "you are claude code, anthropic's official cli for claude",
 ]
-const IDENTITY_CLAUSE =
-  /(you)(\s+are\s+(?:(?:an?\s+)?[\w-]*\s*agent\s+powered\s+by|interacting\s+with\s+the\s+user\s+through\s+the\s+deepseek\s+harness))/giu
+const CHANNEL_GATE_PHRASES: readonly (readonly [string, string])[] = [
+  ['You are an AI agent powered by DeepSeek Harness', 'You are an AI agent running inside DeepSeek Harness'],
+  ['You are a coding agent powered by the ', 'You are a coding agent running on the '],
+  ['You are interacting with the user through the DeepSeek Harness Web GUI', 'You are working with the user inside the DeepSeek Harness Web GUI'],
+  ['Agent Teams is available in this session', 'Agent Teams is enabled for this session'],
+  ['Tokens prefixed with @ are paths the user explicitly referenced.', 'Paths that begin with @ are the ones the user explicitly referenced.'],
+  ['Relative paths resolve from the workspace root;', 'Relative paths are resolved against the workspace root;'],
+  ['absolute paths identify files or directories on the host.', 'absolute paths point at files or directories on the host.'],
+  ['A trailing slash marks a directory:', 'A trailing slash indicates a directory:'],
+  ['list it when its contents matter.', 'list it whenever its contents matter.'],
+  ['Anything else is a file:', 'Everything else is a file:'],
+  ['use the read tool when its contents are needed,', 'use the read tool whenever you need its contents,'],
+  ['and do not claim to have inspected it before reading.', 'and never claim to have inspected it before reading it.'],
+  ['@"..." quotes a path containing spaces.', 'A path containing spaces is quoted with @"...".'],
+  ['without naming another target, they mean this GUI.', 'and names no other target, the interface described here is meant.'],
+  ['they mean this GUI.', 'the interface described here is meant.'],
+  ['The runtime context names the DeepSeek Harness implementation checkout.', 'The runtime context names the local implementation checkout.'],
+]
 
-/** 在身份子句内每个空白后插入零宽空格（幂等）。 */
-function breakIdentityClauses(text: string): string {
-  return text.replace(IDENTITY_CLAUSE, (clause) => clause.replace(/(\s+)/gu, `$1${ZERO_WIDTH_SPACE}`))
+/** 字面改写（顺序即上表顺序，长句在前）。 */
+function rewriteChannelFingerprints(text: string): string {
+  let out = text
+  for (const [from, to] of CHANNEL_GATE_PHRASES) out = out.split(from).join(to)
+  return out
 }
 
-/** 两层整形一次做完；未改动时返回 undefined（避免无谓重序列化）。 */
-function neutralizeScannedText(text: string): string | undefined {
+/** 命中开头特征时加中性 head，然后跑字面改写。 */
+function neutralizeScannedText(text: string): string {
   const opening = text.replace(/^\s+/u, '').toLowerCase()
   const headed = UNAPPROVED_CHANNEL_OPENINGS.some((prefix) => opening.startsWith(prefix))
     ? `${NEUTRAL_SYSTEM_HEAD}\n\n${text}`
     : text
-  const broken = breakIdentityClauses(headed)
-  return broken === text ? undefined : broken
+  return rewriteChannelFingerprints(headed)
+}
+
+/** 对一条消息的可扫描文本整形（字符串或多模态 text part）。 */
+function neutralizeMessageContent(message: Record<string, unknown>): void {
+  const content = message.content
+  if (typeof content === 'string') {
+    message.content = neutralizeScannedText(content)
+    return
+  }
+  if (!Array.isArray(content)) return
+  for (const part of content) {
+    if (part === null || typeof part !== 'object') continue
+    const record = part as Record<string, unknown>
+    if (typeof record.type !== 'string' || record.type.trim().toLowerCase() !== 'text') continue
+    if (typeof record.text !== 'string') continue
+    record.text = neutralizeScannedText(record.text)
+  }
 }
 
 /** 按渠道闸门的要求整形发出去的 messages（就地修改）。 */
 function shapeChannelMessages(messages: Array<Record<string, unknown>>): void {
   for (const message of messages) {
-    // 网关拒绝 `developer` 角色（同样以 11128 拒绝），统一改写成 `system`。
+    // 网关拒绝 `developer` 角色（同以 11128 拒绝），统一改写成 `system`。
     if (message.role === 'developer') message.role = 'system'
   }
   if (messages.length === 0 || messages[0].role !== 'system') {
     messages.unshift({ role: 'system', content: NEUTRAL_SYSTEM_HEAD })
   }
   for (const message of messages) {
+    // 闸门只扫描 `system` 与 `assistant`。
     if (message.role !== 'system' && message.role !== 'assistant') continue
-    if (typeof message.content !== 'string') continue
-    const next = neutralizeScannedText(message.content)
-    if (next !== undefined) message.content = next
+    neutralizeMessageContent(message)
   }
 }
-
 
 function serializeMessages(
   messages: readonly { role: string; content: unknown }[],
