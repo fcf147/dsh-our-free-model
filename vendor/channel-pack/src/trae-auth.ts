@@ -9,6 +9,7 @@
  */
 
 import { Service, type Context } from '@deepseek-ai/cordis'
+import { parseStoredCredential } from './types.js'
 import { credentialRef, type CredentialRef } from '@deepseek-ai/dsh-credentials'
 import {
   TRAE_BATCH_MODELS_PATH,
@@ -105,7 +106,7 @@ declare module '@deepseek-ai/cordis' {
 /** 从存储值解析凭据 JSON；解析失败返回 undefined。 */
 function parseCredential(value: string): TraeCredential | undefined {
   try {
-    const parsed = JSON.parse(value) as TraeCredential
+    const parsed = parseStoredCredential<TraeCredential>(value)
     return typeof parsed === 'object' && parsed !== null && typeof parsed.access_token === 'string'
       ? parsed
       : undefined

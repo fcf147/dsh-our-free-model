@@ -10,6 +10,7 @@
  */
 
 import { Service, type Context } from '@deepseek-ai/cordis'
+import { parseStoredCredential } from './types.js'
 import { credentialRef, type CredentialRef } from '@deepseek-ai/dsh-credentials'
 import {
   LOBSTERAI_REQUEST_TIMEOUT_MS,
@@ -109,7 +110,7 @@ declare module '@deepseek-ai/cordis' {
 /** 从存储值解析凭据 JSON；解析失败返回 undefined。 */
 function parseCredential(value: string): LobsteraiCredential | undefined {
   try {
-    const parsed = JSON.parse(value) as LobsteraiCredential
+    const parsed = parseStoredCredential<LobsteraiCredential>(value)
     return typeof parsed === 'object' && parsed !== null && typeof parsed.access_token === 'string'
       ? parsed
       : undefined

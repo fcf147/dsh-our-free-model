@@ -5,6 +5,7 @@ import { createChannelPackStore, mergeLegacyLoomyLock, sanitizeAccounts, sanitiz
 import type { ChannelPackStore, ChannelPackState, ModelDisableMap, PermanentLockMap } from './channel-pack-store.js'
 import { createPermanentLockStore } from './permanent-lock-store.js'
 import type { PermanentLockStore } from './permanent-lock-store.js'
+import { parseStoredCredential } from './types.js'
 import type {
   ProviderAccountEntry,
   ProviderAccountStatus,
@@ -754,7 +755,7 @@ export class AccountPool {
     try {
       const resolved = await this.ctx.credentials.resolve(credentialRef(refName))
       if (!resolved) return undefined
-      const parsed = JSON.parse(resolved.value) as unknown
+      const parsed = parseStoredCredential(resolved.value) as unknown
       return typeof parsed === 'object' && parsed !== null ? parsed as Record<string, unknown> : undefined
     } catch {
       return undefined
@@ -960,7 +961,7 @@ export class AccountPool {
         continue
       }
       try {
-        const credential = JSON.parse(resolved.value) as StoredTokenCredential
+        const credential = parseStoredCredential(resolved.value) as StoredTokenCredential
         if (failures.length > 0) {
           this.ctx.logger?.warn?.(
             `[channel-pack] ${failures.length} 个 ${provider} 账号不可用，已跳过：${failures.join('; ')}`,

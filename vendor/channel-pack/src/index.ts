@@ -35,6 +35,7 @@ import { LOBSTERAI } from './lobsterai-product.js'
 import { TRAE } from './trae-product.js'
 import { CLINE } from './cline-product.js'
 import { configureDeadModelStore, withDeadModelPruning } from './dead-model-store.js'
+import { parseStoredCredential } from './types.js'
 import type { CodeArtsCredential, BuddyCredential } from './types.js'
 import type { LobsteraiCredential } from './lobsterai.js'
 import type { TraeCredential } from './trae.js'
@@ -382,7 +383,7 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
     const resolved = await ctx.credentials.resolve(credentialRef(refName))
     if (!resolved) return undefined
     try {
-      return JSON.parse(resolved.value) as BuddyCredential
+      return parseStoredCredential(resolved.value) as BuddyCredential
     } catch {
       return undefined
     }
@@ -469,7 +470,7 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
       const resolved = await ctx.credentials.resolve(credentialRef(BUDDY_CREDENTIAL_REF))
       if (!resolved) return undefined
       try {
-        return JSON.parse(resolved.value) as BuddyCredential
+        return parseStoredCredential(resolved.value) as BuddyCredential
       } catch {
         return undefined
       }
@@ -509,7 +510,7 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
       const resolved = await ctx.credentials.resolve(credentialRef(LOBSTERAI.defaultCredentialRef))
       if (!resolved) return undefined
       try {
-        return JSON.parse(resolved.value) as LobsteraiCredential
+        return parseStoredCredential(resolved.value) as LobsteraiCredential
       } catch {
         return undefined
       }
@@ -564,7 +565,7 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
       const resolved = await ctx.credentials.resolve(credentialRef(TRAE.defaultCredentialRef))
       if (!resolved) return undefined
       try {
-        return JSON.parse(resolved.value) as TraeCredential
+        return parseStoredCredential(resolved.value) as TraeCredential
       } catch {
         return undefined
       }
@@ -625,7 +626,7 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
       const resolved = await ctx.credentials.resolve(credentialRef(CLINE.defaultCredentialRef))
       if (!resolved) return undefined
       try {
-        return JSON.parse(resolved.value) as ClineCredential
+        return parseStoredCredential(resolved.value) as ClineCredential
       } catch {
         return undefined
       }
@@ -674,7 +675,7 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
     const resolved = await ctx.credentials.resolve(credentialRef(refName))
     if (!resolved) return undefined
     try {
-      return JSON.parse(resolved.value) as LoomyCredential
+      return parseStoredCredential(resolved.value) as LoomyCredential
     } catch {
       return undefined
     }
@@ -768,7 +769,7 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
       const resolved = await ctx.credentials.resolve(credentialRef(LOOMY.defaultCredentialRef))
       if (!resolved) return undefined
       try {
-        return JSON.parse(resolved.value) as LoomyCredential
+        return parseStoredCredential(resolved.value) as LoomyCredential
       } catch {
         return undefined
       }
@@ -783,7 +784,7 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
       else await loomy.refresh(signal)
       const resolved = await ctx.credentials.resolve(credentialRef(entry?.credentialRef ?? LOOMY.defaultCredentialRef))
       if (!resolved) throw new Error('loomy: credential no longer exists')
-      return JSON.parse(resolved.value) as LoomyCredential
+      return parseStoredCredential(resolved.value) as LoomyCredential
     },
     nextAccount: async (modelId, tried) => {
       const candidates = pool.listAccountsByProvider(LOOMY.id)
@@ -809,7 +810,7 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
       if (resolved === undefined) return []
       let credential: LoomyCredential
       try {
-        credential = JSON.parse(resolved.value) as LoomyCredential
+        credential = parseStoredCredential(resolved.value) as LoomyCredential
       } catch {
         return []
       }
@@ -859,7 +860,7 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
       const resolved = await ctx.credentials.resolve(credentialRef(MINIMAX.defaultCredentialRef))
       if (!resolved) return undefined
       try {
-        return JSON.parse(resolved.value) as MinimaxCredential
+        return parseStoredCredential(resolved.value) as MinimaxCredential
       } catch {
         return undefined
       }
@@ -952,7 +953,7 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
       const resolved = await ctx.credentials.resolve(credentialRef(GEMINI.defaultCredentialRef))
       if (!resolved) return undefined
       try {
-        return JSON.parse(resolved.value) as GeminiCredential
+        return parseStoredCredential(resolved.value) as GeminiCredential
       } catch {
         return undefined
       }
@@ -1199,7 +1200,7 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
           let parsed: { api_key?: string } = {}
           if (resolved !== undefined) {
             try {
-              parsed = JSON.parse(resolved.value) as typeof parsed
+              parsed = parseStoredCredential(resolved.value) as typeof parsed
             } catch {
               // 凭据损坏：回退到匿名凭证，让用户看到「凭据未配置」而不是整条崩掉
             }

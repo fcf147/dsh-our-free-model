@@ -1496,3 +1496,54 @@ export interface LoginFlowOptions {
 
 /** Buddy credential (CodeBuddy/WorkBuddy China), defined alongside the protocol. */
 export type { BuddyCredential } from './buddy.js'
+
+/**
+ * Parse one credential value read from the host credential store.
+ *
+ * WHY NOT PLAIN `JSON.parse`. A stored value can carry RAW control characters
+ * inside a JSON string (observed live on a Buddy/CodeBuddy credential: the
+ * `scope` string contained real newlines because the writer pretty-printed the
+ * document). `JSON.parse` rejects that, so every balance query and every daily
+ * check-in for that account failed with "Bad control character" — while the
+ * account itself was perfectly valid.
+ *
+ * The repair escapes control characters that appear INSIDE a JSON string
+ * (tracking escapes and string state), which turns that document back into
+ * valid JSON without touching the parsed values. Anything still unparsable
+ * falls through to the original error so a genuinely corrupt value is not
+ * silently masked.
+ */
+export function parseStoredCredential<T = unknown>(value: string): T {
+  try {
+    return JSON.parse(value) as T
+  } catch (error) {
+    const repaired = escapeControlsInsideJsonStrings(value)
+    if (repaired === value) throw error
+    return JSON.parse(repaired) as T
+  }
+}
+
+/** Escape raw control characters that sit inside JSON string literals. */
+function escapeControlsInsideJsonStrings(value: string): string {
+  let out = ''
+  let inString = false
+  let escaped = false
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value[i]
+    if (inString) {
+      if (escaped) { out += ch; escaped = false; continue }
+      if (ch === '\\') { out += ch; escaped = true; continue }
+      if (ch === '"') { out += ch; inString = false; continue }
+      const code = ch.charCodeAt(0)
+      if (code < 0x20) {
+        out += code === 0x09 ? '\\t' : code === 0x0d ? '\\r' : code === 0x0a ? '\\n' : `\\u${code.toString(16).padStart(4, '0')}`
+        continue
+      }
+      out += ch
+      continue
+    }
+    if (ch === '"') inString = true
+    out += ch
+  }
+  return out
+}

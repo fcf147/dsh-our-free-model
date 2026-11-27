@@ -35,6 +35,9 @@ import { lobsteraiProductById } from './lobsterai-product.js'
 import { clineProductById } from './cline-product.js'
 import { GeminiAdapter } from './gemini-adapter.js'
 import { LoomyAdapter } from './loomy-adapter.js'
+import type { MinimaxCredential } from './minimax.js'
+import { MINIMAX } from './minimax-product.js'
+import { MinimaxAdapter } from './minimax-adapter.js'
 // Restored channels (WorkBuddy China / Huawei Cloud): the probe must use the
 // real adapters, not fall through to "Unsupported probe adapter".
 import { BuddyAdapter } from './buddy-adapter.js'
@@ -225,6 +228,7 @@ async function probeWithAdapter(
     | TraeAdapter
     | GeminiAdapter
     | LoomyAdapter
+    | MinimaxAdapter
     | BuddyAdapter
     | CodeArtsAdapter
   const buddyProduct = productById(entry.provider)
@@ -302,6 +306,15 @@ async function probeWithAdapter(
       sessionLane: GEMINI_SESSION_LANE_SMOKE,
       project: GEMINI_DEFAULT_PROJECT,
       product: GEMINI,
+    })
+  } else if (entry.provider === MINIMAX.id) {
+    // MiniMax Code → MinimaxAdapter。探测不传 accountPool / fetchRemoteModels，
+    // refresh 置空：凭据真过期就以 AUTH 失败如实上报。
+    adapter = new MinimaxAdapter({
+      credentialRef: ref,
+      resolveCredential: async () => credential as MinimaxCredential,
+      refresh: async () => {},
+      product: MINIMAX,
     })
   } else {
     throw new Error(`Unsupported probe adapter: ${entry.provider}`)

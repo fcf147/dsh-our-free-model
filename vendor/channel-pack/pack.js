@@ -32762,6 +32762,54 @@ function createPermanentLockStore(ctx) {
   return new FileLockStore(join2(home, "channel-pack", PERMANENT_LOCKS_FILE), ctx.logger);
 }
 
+// vendor/channel-pack/src/types.ts
+var BACKUP_FORMAT = "channel-pack/backup";
+var BACKUP_VERSION = 1;
+function parseStoredCredential(value) {
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    const repaired = escapeControlsInsideJsonStrings(value);
+    if (repaired === value) throw error;
+    return JSON.parse(repaired);
+  }
+}
+function escapeControlsInsideJsonStrings(value) {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value[i];
+    if (inString) {
+      if (escaped) {
+        out += ch;
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        out += ch;
+        escaped = true;
+        continue;
+      }
+      if (ch === '"') {
+        out += ch;
+        inString = false;
+        continue;
+      }
+      const code = ch.charCodeAt(0);
+      if (code < 32) {
+        out += code === 9 ? "\\t" : code === 13 ? "\\r" : code === 10 ? "\\n" : `\\u${code.toString(16).padStart(4, "0")}`;
+        continue;
+      }
+      out += ch;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    out += ch;
+  }
+  return out;
+}
+
 // vendor/channel-pack/src/account-pool.ts
 var EMPTY_MODEL_SET = /* @__PURE__ */ new Set();
 function allAccountsRateLimitedForModel(accounts, modelId, now = Date.now()) {
@@ -33365,7 +33413,7 @@ var AccountPool = class {
     try {
       const resolved = await this.ctx.credentials.resolve(credentialRef(refName));
       if (!resolved) return void 0;
-      const parsed = JSON.parse(resolved.value);
+      const parsed = parseStoredCredential(resolved.value);
       return typeof parsed === "object" && parsed !== null ? parsed : void 0;
     } catch {
       return void 0;
@@ -33534,7 +33582,7 @@ var AccountPool = class {
         continue;
       }
       try {
-        const credential = JSON.parse(resolved.value);
+        const credential = parseStoredCredential(resolved.value);
         if (failures.length > 0) {
           this.ctx.logger?.warn?.(
             `[channel-pack] ${failures.length} \u4E2A ${provider} \u8D26\u53F7\u4E0D\u53EF\u7528\uFF0C\u5DF2\u8DF3\u8FC7\uFF1A${failures.join("; ")}`
@@ -45824,7 +45872,7 @@ function waitForProbeRetry(ms, signal) {
 }
 function parseCredential(value) {
   try {
-    const parsed = JSON.parse(value);
+    const parsed = parseStoredCredential(value);
     return typeof parsed === "object" && parsed !== null && typeof parsed.access_token === "string" ? parsed : void 0;
   } catch {
     return void 0;
@@ -46732,7 +46780,7 @@ var CODEARTS_EXPIRY_ACCESSORS = {
 var CODEARTS_CREDENTIAL_REF = "CODEARTS_ACCESS_TOKEN";
 function parseCredential2(value) {
   try {
-    return JSON.parse(value);
+    return parseStoredCredential(value);
   } catch {
     return void 0;
   }
@@ -47449,7 +47497,7 @@ var BUDDY_EXPIRY_ACCESSORS = {
 var BUDDY_CREDENTIAL_REF = "BUDDY_ACCESS_TOKEN";
 function parseCredential3(value) {
   try {
-    const parsed = JSON.parse(value);
+    const parsed = parseStoredCredential(value);
     return typeof parsed === "object" && parsed !== null && typeof parsed.access_token === "string" ? parsed : void 0;
   } catch {
     return void 0;
@@ -47935,7 +47983,7 @@ var RefreshTokenExpiredError4 = class extends Error {
 };
 function parseCredential4(value) {
   try {
-    const parsed = JSON.parse(value);
+    const parsed = parseStoredCredential(value);
     return typeof parsed === "object" && parsed !== null && typeof parsed.access_token === "string" ? parsed : void 0;
   } catch {
     return void 0;
@@ -48809,7 +48857,7 @@ var RefreshTokenExpiredError5 = class extends Error {
 };
 function parseCredential5(value) {
   try {
-    const parsed = JSON.parse(value);
+    const parsed = parseStoredCredential(value);
     return typeof parsed === "object" && parsed !== null && typeof parsed.access_token === "string" ? parsed : void 0;
   } catch {
     return void 0;
@@ -49549,7 +49597,7 @@ var RefreshTokenExpiredError6 = class extends Error {
 };
 function parseCredential6(value) {
   try {
-    const parsed = JSON.parse(value);
+    const parsed = parseStoredCredential(value);
     return typeof parsed === "object" && parsed !== null && typeof parsed.access_token === "string" ? parsed : void 0;
   } catch {
     return void 0;
@@ -53442,7 +53490,7 @@ async function fetchTraeCreditBalance(credential, _product, fetcher = fetch) {
 
 // vendor/channel-pack/src/account-probe.ts
 import { credentialRef as credentialRef8 } from "@deepseek-ai/dsh-credentials";
-import { createUserMessage, LlmError as LlmError14 } from "@deepseek-ai/dsh-llm";
+import { createUserMessage, LlmError as LlmError15 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/gemini-adapter.ts
 import {
@@ -54313,6 +54361,562 @@ function registerGeminiLlm(ctx, options) {
   return adapter;
 }
 
+// vendor/channel-pack/src/minimax-adapter.ts
+import { LlmAdapter as LlmAdapter8, LlmError as LlmError14, ReasoningEffortId as ReasoningEffortId9 } from "@deepseek-ai/dsh-llm";
+
+// vendor/channel-pack/src/minimax-messages.ts
+import { ToolCallId as ToolCallId7 } from "@deepseek-ai/dsh-llm";
+function buildMinimaxMessagesPayload(options) {
+  const payload = {
+    model: options.model,
+    stream: true,
+    messages: serializeMinimaxMessages(options.messages, options.images)
+  };
+  if (options.maxTokens !== void 0) payload.max_tokens = options.maxTokens;
+  const systemText = [...new Set([options.system, collectHarnessSystem(options.messages)].filter((text) => typeof text === "string" && text !== ""))].join("\n\n");
+  if (systemText !== "") payload.system = systemText;
+  if (options.temperature !== void 0) payload.temperature = options.temperature;
+  if (options.stop !== void 0 && options.stop.length > 0) payload.stop_sequences = [...options.stop];
+  if (options.tools !== void 0 && options.tools.length > 0) {
+    payload.tools = options.tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      input_schema: tool.parameters
+    }));
+  }
+  if (options.effort === "none") {
+    payload.thinking = { type: "disabled" };
+    return payload;
+  }
+  if (options.effort === "on") {
+    payload.thinking = { type: "adaptive" };
+    return payload;
+  }
+  if (options.requiresAdaptiveThinking === true) {
+    payload.thinking = { type: "adaptive" };
+    if (options.effort !== void 0) payload.output_config = { effort: options.effort };
+  } else if (options.effort !== void 0) {
+    payload.thinking = { type: "adaptive" };
+    payload.output_config = { effort: options.effort };
+  }
+  return payload;
+}
+function blockText(block) {
+  if (block.type === "text") return block.text;
+  if (block.type === "reasoning") return block.text;
+  return "";
+}
+function serializeMinimaxMessages(messages, images) {
+  const normalized = normalizeHarnessMessages(
+    messages
+  );
+  const { keepCallIds, keepResultIds } = resolveToolPairing(normalized);
+  const out = [];
+  let pendingAssistant;
+  let pendingToolResults = [];
+  const commitPending = () => {
+    if (pendingAssistant === void 0 && pendingToolResults.length === 0) return;
+    if (pendingAssistant !== void 0) out.push(pendingAssistant);
+    if (pendingToolResults.length > 0) {
+      out.push({ role: "user", content: pendingToolResults });
+      pendingToolResults = [];
+    }
+    pendingAssistant = void 0;
+  };
+  for (const message2 of normalized) {
+    if (message2.role === "system") continue;
+    const content = [];
+    let blocks = 0;
+    for (const block of message2.content) {
+      blocks++;
+      if (block.type === "tool-call") {
+        if (!keepCallIds.has(String(block.id))) continue;
+        content.push({
+          type: "tool_use",
+          id: block.id,
+          name: block.name,
+          // ⚠️ 解析成对象；失败退化 `{}`（不编造参数，也不丢块）
+          input: parseToolArguments2(block.arguments)
+        });
+        continue;
+      }
+      if (block.type === "tool-result") {
+        if (!keepResultIds.has(String(block.toolCallId))) continue;
+        pendingToolResults.push({
+          type: "tool_result",
+          tool_use_id: block.toolCallId,
+          // ⚠️ 工具结果内的图片也要内联（否则「工具返回截图」的场景会丢图）。
+          content: serializeToolResultContent(block.content, images),
+          ...block.isError === true ? { is_error: true } : {}
+        });
+        continue;
+      }
+      if (block.type === "image") {
+        const ref = block.attachment;
+        const attachmentId = typeof ref?.attachmentId === "string" ? ref.attachmentId : void 0;
+        const inline = attachmentId === void 0 ? void 0 : images?.get(attachmentId);
+        if (inline === void 0) {
+          throw new Error(
+            "minimax: \u56FE\u7247\u672A\u80FD\u5185\u8054\uFF08\u9644\u4EF6\u670D\u52A1\u4E0D\u53EF\u7528\u6216\u8BFB\u53D6\u5931\u8D25\uFF09\uFF0C\u62D2\u7EDD\u53D1\u51FA\u7F3A\u5C11\u56FE\u7247\u7684\u8BF7\u6C42"
+          );
+        }
+        content.push({
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: inline.mediaType,
+            data: inline.data
+          }
+        });
+        continue;
+      }
+      const text = blockText(block);
+      if (text === "") continue;
+      if (message2.role === "assistant" && block.type === "reasoning") {
+        continue;
+      }
+      content.push({ type: "text", text });
+    }
+    const isPureToolMessage = message2.role !== "assistant" && content.length === 0 && blocks > 0;
+    if (isPureToolMessage) continue;
+    if (message2.role === "assistant") {
+      commitPending();
+      if (content.length === 0) continue;
+      pendingAssistant = { role: "assistant", content };
+      continue;
+    }
+    commitPending();
+    if (content.length > 0) out.push({ role: "user", content });
+  }
+  commitPending();
+  return out;
+}
+function serializeToolResultContent(blocks, images) {
+  const out = [];
+  for (const block of blocks) {
+    if (block.type === "image") {
+      const ref = block.attachment;
+      const attachmentId = typeof ref?.attachmentId === "string" ? ref.attachmentId : void 0;
+      const inline = attachmentId === void 0 ? void 0 : images?.get(attachmentId);
+      if (inline !== void 0) {
+        out.push({
+          type: "image",
+          source: { type: "base64", media_type: inline.mediaType, data: inline.data }
+        });
+      }
+      continue;
+    }
+    const text = blockText(block);
+    if (text !== "") out.push({ type: "text", text });
+  }
+  return out;
+}
+function parseToolArguments2(raw) {
+  if (raw.trim() === "") return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function mapMinimaxStopReason(reason) {
+  const text = typeof reason === "string" ? reason : "";
+  if (text === "tool_use") return { kind: "tool-calls" };
+  if (text === "max_tokens") return { kind: "max-tokens" };
+  if (text === "refusal") return { kind: "stop" };
+  return { kind: "stop" };
+}
+function readMinimaxUsage(raw) {
+  if (typeof raw !== "object" || raw === null) return {};
+  const u = raw;
+  const out = {};
+  const input = nonNegativeInt2(u.input_tokens);
+  if (input !== void 0) out.inputTokens = input;
+  const output = nonNegativeInt2(u.output_tokens);
+  if (output !== void 0) out.outputTokens = output;
+  const cacheRead = nonNegativeInt2(u.cache_read_input_tokens);
+  if (cacheRead !== void 0) out.cacheReadTokens = cacheRead;
+  const cacheWrite = nonNegativeInt2(u.cache_creation_input_tokens);
+  if (cacheWrite !== void 0) out.cacheWriteTokens = cacheWrite;
+  const details = u.output_tokens_details;
+  if (typeof details === "object" && details !== null) {
+    const thinking = nonNegativeInt2(details.thinking_tokens);
+    if (thinking !== void 0) out.reasoningTokens = thinking;
+  }
+  return out;
+}
+function nonNegativeInt2(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : void 0;
+}
+async function* consumeMinimaxSse(options) {
+  const reader = options.body.getReader();
+  const decoder2 = new TextDecoder();
+  let buffer = "";
+  let eventName = "";
+  const blocks = /* @__PURE__ */ new Map();
+  let stopReason;
+  let usage = { inputTokens: 0, outputTokens: 0 };
+  let sawAnyChunk = false;
+  const processLine = async function* (rawLine) {
+    const line2 = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    if (line2 === "") {
+      eventName = "";
+      return;
+    }
+    if (line2.startsWith("event:")) {
+      eventName = line2.slice(6).trim();
+      return;
+    }
+    if (!line2.startsWith("data:")) return;
+    const data = line2.slice(5).trim();
+    if (data === "") return;
+    let parsed;
+    try {
+      parsed = JSON.parse(data);
+    } catch {
+      return;
+    }
+    if (typeof parsed !== "object" || parsed === null) return;
+    throwIfModelQueued(parsed);
+    const frame = parsed;
+    const type = typeof frame.type === "string" ? frame.type : eventName;
+    if (type === "error") {
+      const error = frame.error;
+      const message2 = typeof error === "object" && error !== null ? String(error.message ?? "\u672A\u77E5\u9519\u8BEF") : "\u672A\u77E5\u9519\u8BEF";
+      throw new Error(`minimax: \u6D41\u5185\u9519\u8BEF\uFF1A${message2}`);
+    }
+    if (type === "message_start") {
+      const message2 = frame.message;
+      if (typeof message2 === "object" && message2 !== null) {
+        usage = { ...usage, ...readMinimaxUsage(message2.usage) };
+      }
+      return;
+    }
+    if (type === "content_block_start") {
+      const index = nonNegativeInt2(frame.index) ?? 0;
+      const block = frame.content_block;
+      if (typeof block !== "object" || block === null) return;
+      const b = block;
+      const kind = b.type;
+      if (kind === "thinking") {
+        blocks.set(index, { type: "reasoning", text: "", toolArgs: "" });
+        sawAnyChunk = true;
+        yield { type: "block-start", index, blockType: "reasoning" };
+      } else if (kind === "text") {
+        blocks.set(index, { type: "text", text: "", toolArgs: "" });
+        sawAnyChunk = true;
+        yield { type: "block-start", index, blockType: "text" };
+      } else if (kind === "tool_use") {
+        const id = typeof b.id === "string" ? b.id : "";
+        const name2 = typeof b.name === "string" ? b.name : "";
+        blocks.set(index, { type: "tool-call", text: "", toolId: id, toolName: name2, toolArgs: "" });
+        sawAnyChunk = true;
+        yield { type: "block-start", index, blockType: "tool-call" };
+      }
+      return;
+    }
+    if (type === "content_block_delta") {
+      const index = nonNegativeInt2(frame.index) ?? 0;
+      const delta = frame.delta;
+      if (typeof delta !== "object" || delta === null) return;
+      const d = delta;
+      const state = blocks.get(index);
+      if (d.type === "text_delta" && typeof d.text === "string") {
+        if (state !== void 0) state.text += d.text;
+        yield { type: "text-delta", index, text: d.text };
+      } else if (d.type === "thinking_delta" && typeof d.thinking === "string") {
+        if (state !== void 0) state.text += d.thinking;
+        yield { type: "reasoning-delta", index, text: d.thinking };
+      } else if (d.type === "input_json_delta" && typeof d.partial_json === "string") {
+        if (state !== void 0) state.toolArgs += d.partial_json;
+        yield {
+          type: "tool-call-delta",
+          index,
+          id: ToolCallId7(state?.toolId ?? ""),
+          argumentsDelta: d.partial_json
+        };
+      }
+      return;
+    }
+    if (type === "content_block_stop") {
+      const index = nonNegativeInt2(frame.index) ?? 0;
+      const state = blocks.get(index);
+      if (state === void 0) return;
+      let block;
+      if (state.type === "text") {
+        block = { type: "text", text: state.text };
+      } else if (state.type === "reasoning") {
+        block = { type: "reasoning", text: state.text };
+      } else {
+        block = {
+          type: "tool-call",
+          id: ToolCallId7(state.toolId ?? ""),
+          name: state.toolName ?? "",
+          arguments: state.toolArgs
+        };
+      }
+      blocks.delete(index);
+      yield { type: "block-end", index, block };
+      return;
+    }
+    if (type === "message_delta") {
+      const delta = frame.delta;
+      if (typeof delta === "object" && delta !== null) {
+        stopReason = delta.stop_reason;
+      }
+      usage = { ...usage, ...readMinimaxUsage(frame.usage) };
+      return;
+    }
+  };
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        buffer += decoder2.decode();
+        if (buffer !== "") {
+          const tail = buffer.split("\n");
+          buffer = "";
+          for (const rawLine of tail) yield* processLine(rawLine);
+        }
+        break;
+      }
+      buffer += decoder2.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const rawLine of lines) yield* processLine(rawLine);
+    }
+  } finally {
+    await reader.cancel().catch(() => {
+    });
+    reader.releaseLock?.();
+  }
+  if (!sawAnyChunk) {
+    throw new Error("minimax: \u6A21\u578B\u672A\u8FD4\u56DE\u4EFB\u4F55\u5185\u5BB9\u5757");
+  }
+  yield { type: "usage", usage };
+  yield { type: "finish", reason: mapMinimaxStopReason(stopReason) };
+}
+
+// vendor/channel-pack/src/minimax-adapter.ts
+var MINIMAX_ADAPTIVE_ONLY_PREFIX = "MiniMax-M3.1";
+function minimaxReasoningInfo(entry) {
+  const options = entry.effortOptions;
+  const switchable = entry.thinkingMode === "switchable";
+  if ((options === void 0 || options.length === 0) && !switchable) return void 0;
+  const ids = [...options ?? []];
+  if (switchable) {
+    if (!ids.includes("on")) ids.push("on");
+    if (!ids.includes("none")) ids.push("none");
+  }
+  const efforts = ids.map((id) => {
+    if (id === "none") return { id: ReasoningEffortId9(id), name: "\u5173\u95ED\u601D\u8003" };
+    if (id === "on") return { id: ReasoningEffortId9(id), name: "\u5F00\u542F\u601D\u8003" };
+    return { id: ReasoningEffortId9(id), name: id };
+  });
+  const defaultEffort = entry.defaultEffort !== void 0 && ids.includes(entry.defaultEffort) ? ReasoningEffortId9(entry.defaultEffort) : void 0;
+  return { efforts, ...defaultEffort === void 0 ? {} : { defaultEffort } };
+}
+var MinimaxAdapter = class extends LlmAdapter8 {
+  constructor(options) {
+    super();
+    this.options = options;
+    this.product = options.product ?? MINIMAX;
+  }
+  product;
+  remoteModels;
+  /** 目录加载闸门：并发去重 + 失败/空结果冷却（见 `remote-catalog-gate.ts`）。 */
+  catalogGate = new RemoteCatalogGate();
+  providerInfo(provider) {
+    const id = typeof provider === "string" && provider.length > 0 ? provider : this.product.id;
+    return { id, name: this.product.displayName };
+  }
+  /**
+   * 取远端模型目录；**失败时不把兜底表写进缓存**。
+   *
+   * ⚠ 原实现是 `this.remoteModels = fallback; return fallback` —— 把兜底表当成
+   * 「已加载」记下，于是一次瞬时失败会让该 provider **整个进程生命周期**都只剩
+   * 兜底模型（用户看不到自己的模型，且无从触发重试，只能重启）。
+   * 改为：只缓存**真实远端目录**，兜底表每次现算（纯本地、零成本），
+   * 并用 {@link RemoteCatalogGate} 的冷却挡住「每模型重试一次」的放大。
+   */
+  async loadModels() {
+    if (this.remoteModels !== void 0) return this.remoteModels;
+    const fetchRemote = this.options.fetchRemoteModels;
+    if (fetchRemote !== void 0) {
+      await this.catalogGate.run(async () => {
+        const fetched = await fetchRemote();
+        if (fetched.length === 0) return false;
+        this.remoteModels = fetched;
+        return true;
+      });
+      if (this.remoteModels !== void 0) return this.remoteModels;
+    }
+    return minimaxFallbackEntries(this.product);
+  }
+  /**
+   * 完整目录（**不套黑名单**），供 Channel Pack「显示列表」用。
+   *
+   * ⚠️ **必须同步返回数组，不能是 `async`**（真实缺陷，2026-09-29 修正）。
+   *
+   * 本插件 8 个既有适配器的 `listAllModels()` 全是同步返回 `readonly {...}[]`
+   * （见 `llm-adapter.ts:789`、`raccoon-adapter.ts:229` 等），
+   * `channel-pack-rpc.ts` 的接口（`:587` / `:641` 的 `ModelCatalogSource`）也是同步，
+   * 且两处消费者**都不 await**：
+   * - `:2041` `catalog = [...all]`
+   * - `:2125` `ids = all.map((model) => model.id)`
+   *
+   * 早期这里写成 `async`，返回的是 Promise —— Promise **不是** `undefined`，
+   * 故两处都会走进 `all !== undefined` 分支并抛
+   * `TypeError: all is not iterable` / `TypeError: all.map is not a function`
+   * ⇒「显示列表」与「关闭全部」两个功能同时崩。
+   *
+   * 当时未被发现，是因为 minimax 尚未接入 `src/index.ts` 的 `modelAdapters`
+   * （无调用方），一旦接线即爆发。
+   *
+   * ⚠️ 读缓存而非 `await loadModels()` 是**正确**的：RPC 路径在调用本方法**之前**
+   * 已先 `await llm.listModels(provider)`（`channel-pack-rpc.ts:2011`），
+   * 而 `listModels` 内部会 `await this.loadModels()` 落缓存。
+   * 与 `raccoon-adapter.ts:229-232` 逐字同构。
+   */
+  listAllModels() {
+    const source = this.remoteModels ?? minimaxFallbackEntries(this.product);
+    return source.map((model) => ({ id: model.id, name: model.name }));
+  }
+  inputModalitiesFor(entry) {
+    return entry?.supportsImage === true ? ["text", "image"] : ["text"];
+  }
+  async listModels(_provider) {
+    if (!await providerCatalogVisible(this.options.accountPool, this.product.id)) return [];
+    const all = await this.loadModels();
+    const disabled = this.options.accountPool?.disabledModelsFor(this.product.id);
+    const listed = disabled === void 0 || disabled.size === 0 ? all : all.filter((model) => !disabled.has(model.id));
+    return listed.map((model) => ({
+      provider: this.product.id,
+      id: model.id,
+      name: model.name,
+      inputModalities: this.inputModalitiesFor(model)
+    }));
+  }
+  async resolveModel(provider, model, _signal) {
+    const all = await this.loadModels();
+    const entry = all.find((item) => item.id === model);
+    const resolved = {
+      provider,
+      id: model,
+      name: entry?.name ?? model,
+      inputModalities: this.inputModalitiesFor(entry)
+    };
+    if (entry !== void 0 && entry.contextWindow > 0) {
+      resolved.context = { contextWindow: entry.contextWindow };
+    }
+    const maxTokens = entry?.maxTokens;
+    if (maxTokens !== void 0 && Number.isSafeInteger(maxTokens) && maxTokens > 0) {
+      resolved.defaultMaxTokens = maxTokens;
+    }
+    if (entry !== void 0) {
+      const reasoning = minimaxReasoningInfo(entry);
+      if (reasoning !== void 0) resolved.reasoning = reasoning;
+    }
+    return resolved;
+  }
+  /** 兼容 0.1.1-rc.2 的 `prepareCall` shim（与其余适配器同款）。 */
+  async prepareCall(provider, model, signal) {
+    return {
+      model: await this.resolveModel(provider, model, signal),
+      stream: (options) => this.stream(options)
+    };
+  }
+  /**
+   * 走 **Anthropic Messages** 协议发一次流式请求。
+   *
+   * ⚠️ 凭据过期先静默续期一次（与其余九个适配器同款）。
+   *
+   * ⚠️ **错误必须抛错**，不静默返回空流（Qoder 早期同型缺陷）。
+   */
+  async *stream(options) {
+    let credential = await this.options.resolveCredential(options.model);
+    if (credential === void 0 || isMinimaxExpired(credential)) {
+      await this.options.refresh();
+      credential = await this.options.resolveCredential(options.model);
+    }
+    if (credential === void 0 || credential.access_token === "") {
+      throw new LlmError14("minimax: no usable credential; log in first", "MISSING_CREDENTIAL");
+    }
+    const entry = (await this.loadModels()).find((item) => item.id === options.model);
+    const imageRefs = /* @__PURE__ */ new Map();
+    for (const message2 of options.messages) {
+      if (Array.isArray(message2.content)) collectImages4(message2.content, imageRefs);
+    }
+    let images;
+    if (imageRefs.size > 0) {
+      if (entry?.supportsImage !== true) {
+        throw new LlmError14(
+          `minimax: \u6A21\u578B "${options.model}" \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165`,
+          "UNSUPPORTED_CONTENT"
+        );
+      }
+      if (this.options.readImage === void 0) {
+        throw new LlmError14(
+          "minimax: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1\uFF08readImage \u672A\u63D0\u4F9B\uFF09",
+          "UNSUPPORTED_CONTENT"
+        );
+      }
+      images = /* @__PURE__ */ new Map();
+      const readImage = this.options.readImage;
+      for (const [id, ref] of imageRefs) {
+        const inline = await readImage(ref);
+        if (inline === void 0) continue;
+        images.set(id, {
+          mediaType: inline.mediaType,
+          data: Buffer.from(inline.data).toString("base64")
+        });
+      }
+    }
+    const requiresAdaptiveThinking = options.model.startsWith(MINIMAX_ADAPTIVE_ONLY_PREFIX);
+    const requested = options.reasoningEffort === void 0 ? void 0 : String(options.reasoningEffort);
+    const declared = entry === void 0 ? void 0 : minimaxReasoningInfo(entry);
+    const effort = requested !== void 0 && declared?.efforts.some((e) => String(e.id) === requested) === true ? requested : void 0;
+    const payload = buildMinimaxMessagesPayload({
+      model: options.model,
+      messages: options.messages,
+      system: options.system,
+      tools: options.tools,
+      temperature: options.temperature,
+      maxTokens: options.maxTokens,
+      stop: options.stop,
+      effort,
+      requiresAdaptiveThinking,
+      ...images === void 0 ? {} : { images }
+    });
+    const response = await fetch(`${this.product.apiHost}${MINIMAX_INFER_PATH}`, {
+      method: "POST",
+      headers: minimaxInferHeaders(credential),
+      body: JSON.stringify(payload),
+      signal: options.signal
+    }).then(checkQueuedResponse);
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      const code = response.status === 402 ? "QUOTA_EXCEEDED" : httpErrorCode5(response.status);
+      throw new LlmError14(
+        `minimax: HTTP ${response.status}${text === "" ? "" : ` \u2014 ${text.slice(0, 500)}`}`,
+        code,
+        { status: response.status }
+      );
+    }
+    if (response.body === null) {
+      throw new LlmError14("minimax: \u54CD\u5E94\u7F3A\u5C11 body", "EMPTY_RESPONSE");
+    }
+    yield* consumeMinimaxSse({ body: response.body, signal: options.signal });
+  }
+};
+function registerMinimaxLlm(ctx, options) {
+  const product = options.product ?? MINIMAX;
+  const adapter = withQueueAccountRotation(product.id, options, (scoped) => new MinimaxAdapter(scoped));
+  registerAdapterIdempotent(ctx.llm, [product.id], adapter);
+  return adapter;
+}
+
 // vendor/channel-pack/src/account-probe.ts
 var TRAE_PROVIDER_ID = "trae";
 var PROBE_PROMPT = "\u53EA\u56DE\u7B54\u4E24\u4E2A\u5B57\uFF1A\u6536\u5230";
@@ -54322,7 +54926,7 @@ var PROBE_CANDIDATES_MAX = 4;
 var PROBE_ATTEMPT_TIMEOUT_MS = 2e4;
 var PROBE_TOTAL_BUDGET_MS = 8e4;
 function isRateLimitFailure(error) {
-  if (error instanceof LlmError14) {
+  if (error instanceof LlmError15) {
     if (error.code === "RATE_LIMIT" || error.code === "QUOTA_EXCEEDED" || error.code === "QUOTA") return true;
   }
   const message2 = error instanceof Error ? error.message : String(error);
@@ -54392,6 +54996,14 @@ async function probeWithAdapter(entry, credential, modelId, timeoutMs) {
       sessionLane: GEMINI_SESSION_LANE_SMOKE,
       project: GEMINI_DEFAULT_PROJECT,
       product: GEMINI
+    });
+  } else if (entry.provider === MINIMAX.id) {
+    adapter = new MinimaxAdapter({
+      credentialRef: ref,
+      resolveCredential: async () => credential,
+      refresh: async () => {
+      },
+      product: MINIMAX
     });
   } else {
     throw new Error(`Unsupported probe adapter: ${entry.provider}`);
@@ -54551,12 +55163,6 @@ async function resetAllAccounts(pool, provider) {
 
 // vendor/channel-pack/src/backup.ts
 import { credentialRef as credentialRef9 } from "@deepseek-ai/dsh-credentials";
-
-// vendor/channel-pack/src/types.ts
-var BACKUP_FORMAT = "channel-pack/backup";
-var BACKUP_VERSION = 1;
-
-// vendor/channel-pack/src/backup.ts
 var BackupFormatError = class extends Error {
 };
 async function exportBackup(pool, credentials) {
@@ -55363,7 +55969,7 @@ function normalizeZcodeLoginProvider(raw) {
 }
 function parseBuddyCredential(raw) {
   try {
-    const parsed = JSON.parse(raw);
+    const parsed = parseStoredCredential(raw);
     return typeof parsed === "object" && parsed !== null && typeof parsed.access_token === "string" ? parsed : void 0;
   } catch {
     return void 0;
@@ -55371,7 +55977,7 @@ function parseBuddyCredential(raw) {
 }
 function parseCodeArtsCredential(raw) {
   try {
-    const parsed = JSON.parse(raw);
+    const parsed = parseStoredCredential(raw);
     return typeof parsed === "object" && parsed !== null && typeof parsed.access_key_id === "string" ? parsed : void 0;
   } catch {
     return void 0;
@@ -55379,7 +55985,7 @@ function parseCodeArtsCredential(raw) {
 }
 function parseLobsteraiCredential(raw) {
   try {
-    const parsed = JSON.parse(raw);
+    const parsed = parseStoredCredential(raw);
     return typeof parsed === "object" && parsed !== null && typeof parsed.access_token === "string" ? parsed : void 0;
   } catch {
     return void 0;
@@ -55387,7 +55993,7 @@ function parseLobsteraiCredential(raw) {
 }
 function parseQoderCredential(raw) {
   try {
-    const parsed = JSON.parse(raw);
+    const parsed = parseStoredCredential(raw);
     return typeof parsed === "object" && parsed !== null && typeof parsed.access_token === "string" ? parsed : void 0;
   } catch {
     return void 0;
@@ -55395,7 +56001,7 @@ function parseQoderCredential(raw) {
 }
 function parseTraeCredential(raw) {
   try {
-    const parsed = JSON.parse(raw);
+    const parsed = parseStoredCredential(raw);
     return typeof parsed === "object" && parsed !== null && typeof parsed.access_token === "string" ? parsed : void 0;
   } catch {
     return void 0;
@@ -55403,7 +56009,7 @@ function parseTraeCredential(raw) {
 }
 function parseClineCredential(raw) {
   try {
-    const parsed = JSON.parse(raw);
+    const parsed = parseStoredCredential(raw);
     return typeof parsed === "object" && parsed !== null && typeof parsed.access_token === "string" ? parsed : void 0;
   } catch {
     return void 0;
@@ -55476,7 +56082,7 @@ async function collectCreditsStatus(accounts, product, deps) {
     try {
       const resolved = await deps.resolve(credentialRef11(entry.credentialRef));
       if (resolved !== void 0) {
-        const credential = JSON.parse(resolved.value);
+        const credential = parseStoredCredential(resolved.value);
         status = await fetchStatus(credential, product);
       }
     } catch (error) {
@@ -55509,7 +56115,7 @@ async function collectClaimResults(accounts, product, deps) {
       if (resolved === void 0) {
         outcome = { kind: "failed", code: -1, message: "\u51ED\u636E\u672A\u914D\u7F6E" };
       } else {
-        const credential = JSON.parse(resolved.value);
+        const credential = parseStoredCredential(resolved.value);
         if (!precheck) {
           outcome = await claim(credential, product, entry);
         } else {
@@ -55554,7 +56160,7 @@ async function collectCreditBalances(accounts, product, deps) {
       if (resolved === void 0) {
         error = "\u51ED\u636E\u672A\u914D\u7F6E";
       } else {
-        const credential = JSON.parse(resolved.value);
+        const credential = parseStoredCredential(resolved.value);
         if (fetchDetailed !== void 0) {
           const detailed = await fetchDetailed(credential, product);
           balance = detailed.balance;
@@ -55777,7 +56383,7 @@ function registerChannelPackEndpoints(ctx, pool, lobsterai, qoder, qoderCn, trae
           out.push(account);
           continue;
         }
-        const credential = JSON.parse(resolved.value);
+        const credential = parseStoredCredential(resolved.value);
         const accountName = typeof credential.account_name === "string" && credential.account_name.trim().length > 0 ? credential.account_name.trim() : typeof credential.account_label === "string" && credential.account_label.trim().length > 0 && !/^id:/.test(credential.account_label) && !/^设备/.test(credential.account_label) ? credential.account_label.trim() : void 0;
         const phone = typeof credential.phone === "string" && credential.phone.trim().length > 0 ? credential.phone.trim() : phoneFromUserId(credential.user_id);
         out.push({
@@ -56373,7 +56979,7 @@ function registerChannelPackEndpoints(ctx, pool, lobsterai, qoder, qoderCn, trae
         if (entry.provider === ZCODE.id) {
           let parsed;
           try {
-            parsed = JSON.parse(resolved.value);
+            parsed = parseStoredCredential(resolved.value);
           } catch {
             return { ok: true, value: { done: false } };
           }
@@ -56472,7 +57078,7 @@ function registerChannelPackEndpoints(ctx, pool, lobsterai, qoder, qoderCn, trae
           return { ok: false, error: { code: "bad-request", message: "\u51ED\u636E\u672A\u914D\u7F6E" } };
         }
         if (req.provider === RACCOON.id) {
-          const credential2 = JSON.parse(resolved.value);
+          const credential2 = parseStoredCredential(resolved.value);
           const status = await raccoon.fetchOnboardingStatus(credential2);
           return {
             ok: true,
@@ -56486,7 +57092,7 @@ function registerChannelPackEndpoints(ctx, pool, lobsterai, qoder, qoderCn, trae
             }
           };
         }
-        const credential = JSON.parse(resolved.value);
+        const credential = parseStoredCredential(resolved.value);
         const state = await loomy.fetchOnboardingTasks(credential);
         return {
           ok: true,
@@ -56567,7 +57173,7 @@ function registerChannelPackEndpoints(ctx, pool, lobsterai, qoder, qoderCn, trae
           return { ok: false, error: { code: "bad-request", message: "\u51ED\u636E\u672A\u914D\u7F6E" } };
         }
         if (req.provider === RACCOON.id) {
-          const credential2 = JSON.parse(resolved.value);
+          const credential2 = parseStoredCredential(resolved.value);
           const outcome = await raccoon.claimLoginReward(credential2);
           if (outcome.kind === "failed") {
             return { ok: false, error: { code: "bad-request", message: outcome.message } };
@@ -56585,7 +57191,7 @@ function registerChannelPackEndpoints(ctx, pool, lobsterai, qoder, qoderCn, trae
             }
           };
         }
-        const credential = JSON.parse(resolved.value);
+        const credential = parseStoredCredential(resolved.value);
         const result = await loomy.claimOnboardingTasks(credential);
         return {
           ok: true,
@@ -56828,7 +57434,7 @@ function registerChannelPackEndpoints(ctx, pool, lobsterai, qoder, qoderCn, trae
             }
             let credential;
             try {
-              credential = JSON.parse(resolved.value);
+              credential = parseStoredCredential(resolved.value);
             } catch {
               values.push({
                 accountId: account2.id,
@@ -56886,7 +57492,7 @@ function registerChannelPackEndpoints(ctx, pool, lobsterai, qoder, qoderCn, trae
             } else {
               let credential;
               try {
-                credential = JSON.parse(resolved.value);
+                credential = parseStoredCredential(resolved.value);
               } catch {
                 credential = void 0;
               }
@@ -56908,7 +57514,7 @@ function registerChannelPackEndpoints(ctx, pool, lobsterai, qoder, qoderCn, trae
             value: { results, summary: computeClaimSummary(outcomes) }
           };
         }
-        return { ok: false, error: { code: "bad-request", message: `unsupported provider: ${req.provider}` } };
+        return { ok: false, error: { code: "bad-request", message: `\u8BE5\u6E20\u9053\u6CA1\u6709\u6BCF\u65E5\u7B7E\u5230\uFF08${req.provider}\uFF09` } };
       }
       // 积分余额（Credits Balance）：逐账号顺序查询。
       //
@@ -56983,7 +57589,7 @@ function registerChannelPackEndpoints(ctx, pool, lobsterai, qoder, qoderCn, trae
             }
             let credential;
             try {
-              credential = JSON.parse(resolved.value);
+              credential = parseStoredCredential(resolved.value);
             } catch {
               values.push({
                 accountId: account2.id,
@@ -57091,7 +57697,7 @@ function registerChannelPackEndpoints(ctx, pool, lobsterai, qoder, qoderCn, trae
             }
             let credential;
             try {
-              credential = JSON.parse(resolved.value);
+              credential = parseStoredCredential(resolved.value);
             } catch {
               values.push({
                 accountId: account2.id,
@@ -57129,7 +57735,7 @@ function registerChannelPackEndpoints(ctx, pool, lobsterai, qoder, qoderCn, trae
             }
             let credential;
             try {
-              credential = JSON.parse(resolved.value);
+              credential = parseStoredCredential(resolved.value);
             } catch {
               values.push({
                 accountId: account2.id,
@@ -57165,7 +57771,7 @@ function registerChannelPackEndpoints(ctx, pool, lobsterai, qoder, qoderCn, trae
             }
             let credential;
             try {
-              credential = JSON.parse(resolved.value);
+              credential = parseStoredCredential(resolved.value);
             } catch {
               values.push({
                 accountId: account2.id,
@@ -57202,7 +57808,7 @@ function registerChannelPackEndpoints(ctx, pool, lobsterai, qoder, qoderCn, trae
             }
             let credential;
             try {
-              credential = JSON.parse(resolved.value);
+              credential = parseStoredCredential(resolved.value);
             } catch {
               values.push({
                 accountId: account2.id,
@@ -57292,7 +57898,7 @@ function registerChannelPackEndpoints(ctx, pool, lobsterai, qoder, qoderCn, trae
           }
           let credential;
           try {
-            credential = JSON.parse(resolved.value);
+            credential = parseStoredCredential(resolved.value);
           } catch {
             values.push({
               accountId: account2.id,
@@ -58067,7 +58673,7 @@ function loadOrCreateApiKey(home, env = process.env) {
 
 // vendor/channel-pack/src/openai-gateway/messages.ts
 import { randomUUID as randomUUID9 } from "node:crypto";
-import { createToolResultMessage, ReasoningEffortId as ReasoningEffortId9 } from "@deepseek-ai/dsh-llm";
+import { createToolResultMessage, ReasoningEffortId as ReasoningEffortId10 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/openai-gateway/images.ts
 var DEFAULT_IMAGE_LIMITS = {
@@ -58385,7 +58991,7 @@ async function toGenerateOptions(body, signal, reasoningEffortOverride, maxToken
     // ⚠️ 判据是 `== null`（同时排除 undefined 与 null）：`null` = 明确不下发，
     // 两者都不能写进请求。写成 `=== undefined` 会把 null 塞进
     // `ReasoningEffortId(null)`，等于又发了一个非法档位。
-    ...reasoningEffort == null ? {} : { reasoningEffort: ReasoningEffortId9(reasoningEffort) },
+    ...reasoningEffort == null ? {} : { reasoningEffort: ReasoningEffortId10(reasoningEffort) },
     signal
   };
 }
@@ -58430,7 +59036,7 @@ function findCaseInsensitiveSuggestion(requested, catalog) {
 
 // vendor/channel-pack/src/openai-gateway/responses.ts
 import { createHash as createHash7, randomUUID as randomUUID11 } from "node:crypto";
-import { ReasoningEffortId as ReasoningEffortId10 } from "@deepseek-ai/dsh-llm";
+import { ReasoningEffortId as ReasoningEffortId11 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/openai-gateway/stream.ts
 import { randomUUID as randomUUID10 } from "node:crypto";
@@ -58961,7 +59567,7 @@ async function toResponsesGenerateOptions(body, signal, reasoningEffortOverride,
     ...tools === void 0 ? {} : { tools },
     ...maxTokens === void 0 ? {} : { maxTokens },
     ...temperature === void 0 ? {} : { temperature },
-    ...reasoningEffort == null ? {} : { reasoningEffort: ReasoningEffortId10(reasoningEffort) },
+    ...reasoningEffort == null ? {} : { reasoningEffort: ReasoningEffortId11(reasoningEffort) },
     signal
   };
 }
@@ -59781,7 +60387,7 @@ function mountOpenAiGateway(ctx, pool) {
 }
 
 // vendor/channel-pack/src/loop-recovery.ts
-import { createUserMessage as createUserMessage2, LlmError as LlmError15 } from "@deepseek-ai/dsh-llm";
+import { createUserMessage as createUserMessage2, LlmError as LlmError16 } from "@deepseek-ai/dsh-llm";
 var LOOP_RESUME_PROMPT = "\u7EE7\u7EED\u672A\u5B8C\u6210\u7684\u4EFB\u52A1\u3002\u4E0A\u4E00\u8F6E\u4F60\u7684\u601D\u8003\u9677\u5165\u4E86\u91CD\u590D\uFF08\u540C\u4E00\u6BB5\u63A8\u7406\u53CD\u590D\u51FA\u73B0\uFF09\u800C\u88AB\u4E2D\u6B62 \u2014\u2014 \u8BF7\u6362\u4E00\u79CD\u601D\u8DEF\uFF0C\u4E0D\u8981\u91CD\u590D\u521A\u624D\u90A3\u6BB5\u63A8\u7406\uFF0C\u76F4\u63A5\u63A8\u8FDB\u4EFB\u52A1\u3002";
 var LOOP_RESUME_DEFAULT_MAX = 2;
 var LOOP_RESUME_MAX_LIMIT = 10;
@@ -59802,7 +60408,7 @@ function resolveLoopResumePolicy(env = process.env) {
   };
 }
 function isReasoningLoopFailure(error) {
-  if (error instanceof LlmError15) return error.code === REASONING_LOOP_CODE;
+  if (error instanceof LlmError16) return error.code === REASONING_LOOP_CODE;
   if (typeof error !== "object" || error === null) return false;
   return error.code === REASONING_LOOP_CODE;
 }
@@ -60889,562 +61495,6 @@ function parseMinimaxModelsPayload(payload) {
     out.sort((a, b) => (index.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (index.get(b.id) ?? Number.MAX_SAFE_INTEGER));
   }
   return out;
-}
-
-// vendor/channel-pack/src/minimax-adapter.ts
-import { LlmAdapter as LlmAdapter8, LlmError as LlmError16, ReasoningEffortId as ReasoningEffortId11 } from "@deepseek-ai/dsh-llm";
-
-// vendor/channel-pack/src/minimax-messages.ts
-import { ToolCallId as ToolCallId7 } from "@deepseek-ai/dsh-llm";
-function buildMinimaxMessagesPayload(options) {
-  const payload = {
-    model: options.model,
-    stream: true,
-    messages: serializeMinimaxMessages(options.messages, options.images)
-  };
-  if (options.maxTokens !== void 0) payload.max_tokens = options.maxTokens;
-  const systemText = [...new Set([options.system, collectHarnessSystem(options.messages)].filter((text) => typeof text === "string" && text !== ""))].join("\n\n");
-  if (systemText !== "") payload.system = systemText;
-  if (options.temperature !== void 0) payload.temperature = options.temperature;
-  if (options.stop !== void 0 && options.stop.length > 0) payload.stop_sequences = [...options.stop];
-  if (options.tools !== void 0 && options.tools.length > 0) {
-    payload.tools = options.tools.map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      input_schema: tool.parameters
-    }));
-  }
-  if (options.effort === "none") {
-    payload.thinking = { type: "disabled" };
-    return payload;
-  }
-  if (options.effort === "on") {
-    payload.thinking = { type: "adaptive" };
-    return payload;
-  }
-  if (options.requiresAdaptiveThinking === true) {
-    payload.thinking = { type: "adaptive" };
-    if (options.effort !== void 0) payload.output_config = { effort: options.effort };
-  } else if (options.effort !== void 0) {
-    payload.thinking = { type: "adaptive" };
-    payload.output_config = { effort: options.effort };
-  }
-  return payload;
-}
-function blockText(block) {
-  if (block.type === "text") return block.text;
-  if (block.type === "reasoning") return block.text;
-  return "";
-}
-function serializeMinimaxMessages(messages, images) {
-  const normalized = normalizeHarnessMessages(
-    messages
-  );
-  const { keepCallIds, keepResultIds } = resolveToolPairing(normalized);
-  const out = [];
-  let pendingAssistant;
-  let pendingToolResults = [];
-  const commitPending = () => {
-    if (pendingAssistant === void 0 && pendingToolResults.length === 0) return;
-    if (pendingAssistant !== void 0) out.push(pendingAssistant);
-    if (pendingToolResults.length > 0) {
-      out.push({ role: "user", content: pendingToolResults });
-      pendingToolResults = [];
-    }
-    pendingAssistant = void 0;
-  };
-  for (const message2 of normalized) {
-    if (message2.role === "system") continue;
-    const content = [];
-    let blocks = 0;
-    for (const block of message2.content) {
-      blocks++;
-      if (block.type === "tool-call") {
-        if (!keepCallIds.has(String(block.id))) continue;
-        content.push({
-          type: "tool_use",
-          id: block.id,
-          name: block.name,
-          // ⚠️ 解析成对象；失败退化 `{}`（不编造参数，也不丢块）
-          input: parseToolArguments2(block.arguments)
-        });
-        continue;
-      }
-      if (block.type === "tool-result") {
-        if (!keepResultIds.has(String(block.toolCallId))) continue;
-        pendingToolResults.push({
-          type: "tool_result",
-          tool_use_id: block.toolCallId,
-          // ⚠️ 工具结果内的图片也要内联（否则「工具返回截图」的场景会丢图）。
-          content: serializeToolResultContent(block.content, images),
-          ...block.isError === true ? { is_error: true } : {}
-        });
-        continue;
-      }
-      if (block.type === "image") {
-        const ref = block.attachment;
-        const attachmentId = typeof ref?.attachmentId === "string" ? ref.attachmentId : void 0;
-        const inline = attachmentId === void 0 ? void 0 : images?.get(attachmentId);
-        if (inline === void 0) {
-          throw new Error(
-            "minimax: \u56FE\u7247\u672A\u80FD\u5185\u8054\uFF08\u9644\u4EF6\u670D\u52A1\u4E0D\u53EF\u7528\u6216\u8BFB\u53D6\u5931\u8D25\uFF09\uFF0C\u62D2\u7EDD\u53D1\u51FA\u7F3A\u5C11\u56FE\u7247\u7684\u8BF7\u6C42"
-          );
-        }
-        content.push({
-          type: "image",
-          source: {
-            type: "base64",
-            media_type: inline.mediaType,
-            data: inline.data
-          }
-        });
-        continue;
-      }
-      const text = blockText(block);
-      if (text === "") continue;
-      if (message2.role === "assistant" && block.type === "reasoning") {
-        continue;
-      }
-      content.push({ type: "text", text });
-    }
-    const isPureToolMessage = message2.role !== "assistant" && content.length === 0 && blocks > 0;
-    if (isPureToolMessage) continue;
-    if (message2.role === "assistant") {
-      commitPending();
-      if (content.length === 0) continue;
-      pendingAssistant = { role: "assistant", content };
-      continue;
-    }
-    commitPending();
-    if (content.length > 0) out.push({ role: "user", content });
-  }
-  commitPending();
-  return out;
-}
-function serializeToolResultContent(blocks, images) {
-  const out = [];
-  for (const block of blocks) {
-    if (block.type === "image") {
-      const ref = block.attachment;
-      const attachmentId = typeof ref?.attachmentId === "string" ? ref.attachmentId : void 0;
-      const inline = attachmentId === void 0 ? void 0 : images?.get(attachmentId);
-      if (inline !== void 0) {
-        out.push({
-          type: "image",
-          source: { type: "base64", media_type: inline.mediaType, data: inline.data }
-        });
-      }
-      continue;
-    }
-    const text = blockText(block);
-    if (text !== "") out.push({ type: "text", text });
-  }
-  return out;
-}
-function parseToolArguments2(raw) {
-  if (raw.trim() === "") return {};
-  try {
-    const parsed = JSON.parse(raw);
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-function mapMinimaxStopReason(reason) {
-  const text = typeof reason === "string" ? reason : "";
-  if (text === "tool_use") return { kind: "tool-calls" };
-  if (text === "max_tokens") return { kind: "max-tokens" };
-  if (text === "refusal") return { kind: "stop" };
-  return { kind: "stop" };
-}
-function readMinimaxUsage(raw) {
-  if (typeof raw !== "object" || raw === null) return {};
-  const u = raw;
-  const out = {};
-  const input = nonNegativeInt2(u.input_tokens);
-  if (input !== void 0) out.inputTokens = input;
-  const output = nonNegativeInt2(u.output_tokens);
-  if (output !== void 0) out.outputTokens = output;
-  const cacheRead = nonNegativeInt2(u.cache_read_input_tokens);
-  if (cacheRead !== void 0) out.cacheReadTokens = cacheRead;
-  const cacheWrite = nonNegativeInt2(u.cache_creation_input_tokens);
-  if (cacheWrite !== void 0) out.cacheWriteTokens = cacheWrite;
-  const details = u.output_tokens_details;
-  if (typeof details === "object" && details !== null) {
-    const thinking = nonNegativeInt2(details.thinking_tokens);
-    if (thinking !== void 0) out.reasoningTokens = thinking;
-  }
-  return out;
-}
-function nonNegativeInt2(value) {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : void 0;
-}
-async function* consumeMinimaxSse(options) {
-  const reader = options.body.getReader();
-  const decoder2 = new TextDecoder();
-  let buffer = "";
-  let eventName = "";
-  const blocks = /* @__PURE__ */ new Map();
-  let stopReason;
-  let usage = { inputTokens: 0, outputTokens: 0 };
-  let sawAnyChunk = false;
-  const processLine = async function* (rawLine) {
-    const line2 = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
-    if (line2 === "") {
-      eventName = "";
-      return;
-    }
-    if (line2.startsWith("event:")) {
-      eventName = line2.slice(6).trim();
-      return;
-    }
-    if (!line2.startsWith("data:")) return;
-    const data = line2.slice(5).trim();
-    if (data === "") return;
-    let parsed;
-    try {
-      parsed = JSON.parse(data);
-    } catch {
-      return;
-    }
-    if (typeof parsed !== "object" || parsed === null) return;
-    throwIfModelQueued(parsed);
-    const frame = parsed;
-    const type = typeof frame.type === "string" ? frame.type : eventName;
-    if (type === "error") {
-      const error = frame.error;
-      const message2 = typeof error === "object" && error !== null ? String(error.message ?? "\u672A\u77E5\u9519\u8BEF") : "\u672A\u77E5\u9519\u8BEF";
-      throw new Error(`minimax: \u6D41\u5185\u9519\u8BEF\uFF1A${message2}`);
-    }
-    if (type === "message_start") {
-      const message2 = frame.message;
-      if (typeof message2 === "object" && message2 !== null) {
-        usage = { ...usage, ...readMinimaxUsage(message2.usage) };
-      }
-      return;
-    }
-    if (type === "content_block_start") {
-      const index = nonNegativeInt2(frame.index) ?? 0;
-      const block = frame.content_block;
-      if (typeof block !== "object" || block === null) return;
-      const b = block;
-      const kind = b.type;
-      if (kind === "thinking") {
-        blocks.set(index, { type: "reasoning", text: "", toolArgs: "" });
-        sawAnyChunk = true;
-        yield { type: "block-start", index, blockType: "reasoning" };
-      } else if (kind === "text") {
-        blocks.set(index, { type: "text", text: "", toolArgs: "" });
-        sawAnyChunk = true;
-        yield { type: "block-start", index, blockType: "text" };
-      } else if (kind === "tool_use") {
-        const id = typeof b.id === "string" ? b.id : "";
-        const name2 = typeof b.name === "string" ? b.name : "";
-        blocks.set(index, { type: "tool-call", text: "", toolId: id, toolName: name2, toolArgs: "" });
-        sawAnyChunk = true;
-        yield { type: "block-start", index, blockType: "tool-call" };
-      }
-      return;
-    }
-    if (type === "content_block_delta") {
-      const index = nonNegativeInt2(frame.index) ?? 0;
-      const delta = frame.delta;
-      if (typeof delta !== "object" || delta === null) return;
-      const d = delta;
-      const state = blocks.get(index);
-      if (d.type === "text_delta" && typeof d.text === "string") {
-        if (state !== void 0) state.text += d.text;
-        yield { type: "text-delta", index, text: d.text };
-      } else if (d.type === "thinking_delta" && typeof d.thinking === "string") {
-        if (state !== void 0) state.text += d.thinking;
-        yield { type: "reasoning-delta", index, text: d.thinking };
-      } else if (d.type === "input_json_delta" && typeof d.partial_json === "string") {
-        if (state !== void 0) state.toolArgs += d.partial_json;
-        yield {
-          type: "tool-call-delta",
-          index,
-          id: ToolCallId7(state?.toolId ?? ""),
-          argumentsDelta: d.partial_json
-        };
-      }
-      return;
-    }
-    if (type === "content_block_stop") {
-      const index = nonNegativeInt2(frame.index) ?? 0;
-      const state = blocks.get(index);
-      if (state === void 0) return;
-      let block;
-      if (state.type === "text") {
-        block = { type: "text", text: state.text };
-      } else if (state.type === "reasoning") {
-        block = { type: "reasoning", text: state.text };
-      } else {
-        block = {
-          type: "tool-call",
-          id: ToolCallId7(state.toolId ?? ""),
-          name: state.toolName ?? "",
-          arguments: state.toolArgs
-        };
-      }
-      blocks.delete(index);
-      yield { type: "block-end", index, block };
-      return;
-    }
-    if (type === "message_delta") {
-      const delta = frame.delta;
-      if (typeof delta === "object" && delta !== null) {
-        stopReason = delta.stop_reason;
-      }
-      usage = { ...usage, ...readMinimaxUsage(frame.usage) };
-      return;
-    }
-  };
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        buffer += decoder2.decode();
-        if (buffer !== "") {
-          const tail = buffer.split("\n");
-          buffer = "";
-          for (const rawLine of tail) yield* processLine(rawLine);
-        }
-        break;
-      }
-      buffer += decoder2.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      for (const rawLine of lines) yield* processLine(rawLine);
-    }
-  } finally {
-    await reader.cancel().catch(() => {
-    });
-    reader.releaseLock?.();
-  }
-  if (!sawAnyChunk) {
-    throw new Error("minimax: \u6A21\u578B\u672A\u8FD4\u56DE\u4EFB\u4F55\u5185\u5BB9\u5757");
-  }
-  yield { type: "usage", usage };
-  yield { type: "finish", reason: mapMinimaxStopReason(stopReason) };
-}
-
-// vendor/channel-pack/src/minimax-adapter.ts
-var MINIMAX_ADAPTIVE_ONLY_PREFIX = "MiniMax-M3.1";
-function minimaxReasoningInfo(entry) {
-  const options = entry.effortOptions;
-  const switchable = entry.thinkingMode === "switchable";
-  if ((options === void 0 || options.length === 0) && !switchable) return void 0;
-  const ids = [...options ?? []];
-  if (switchable) {
-    if (!ids.includes("on")) ids.push("on");
-    if (!ids.includes("none")) ids.push("none");
-  }
-  const efforts = ids.map((id) => {
-    if (id === "none") return { id: ReasoningEffortId11(id), name: "\u5173\u95ED\u601D\u8003" };
-    if (id === "on") return { id: ReasoningEffortId11(id), name: "\u5F00\u542F\u601D\u8003" };
-    return { id: ReasoningEffortId11(id), name: id };
-  });
-  const defaultEffort = entry.defaultEffort !== void 0 && ids.includes(entry.defaultEffort) ? ReasoningEffortId11(entry.defaultEffort) : void 0;
-  return { efforts, ...defaultEffort === void 0 ? {} : { defaultEffort } };
-}
-var MinimaxAdapter = class extends LlmAdapter8 {
-  constructor(options) {
-    super();
-    this.options = options;
-    this.product = options.product ?? MINIMAX;
-  }
-  product;
-  remoteModels;
-  /** 目录加载闸门：并发去重 + 失败/空结果冷却（见 `remote-catalog-gate.ts`）。 */
-  catalogGate = new RemoteCatalogGate();
-  providerInfo(provider) {
-    const id = typeof provider === "string" && provider.length > 0 ? provider : this.product.id;
-    return { id, name: this.product.displayName };
-  }
-  /**
-   * 取远端模型目录；**失败时不把兜底表写进缓存**。
-   *
-   * ⚠ 原实现是 `this.remoteModels = fallback; return fallback` —— 把兜底表当成
-   * 「已加载」记下，于是一次瞬时失败会让该 provider **整个进程生命周期**都只剩
-   * 兜底模型（用户看不到自己的模型，且无从触发重试，只能重启）。
-   * 改为：只缓存**真实远端目录**，兜底表每次现算（纯本地、零成本），
-   * 并用 {@link RemoteCatalogGate} 的冷却挡住「每模型重试一次」的放大。
-   */
-  async loadModels() {
-    if (this.remoteModels !== void 0) return this.remoteModels;
-    const fetchRemote = this.options.fetchRemoteModels;
-    if (fetchRemote !== void 0) {
-      await this.catalogGate.run(async () => {
-        const fetched = await fetchRemote();
-        if (fetched.length === 0) return false;
-        this.remoteModels = fetched;
-        return true;
-      });
-      if (this.remoteModels !== void 0) return this.remoteModels;
-    }
-    return minimaxFallbackEntries(this.product);
-  }
-  /**
-   * 完整目录（**不套黑名单**），供 Channel Pack「显示列表」用。
-   *
-   * ⚠️ **必须同步返回数组，不能是 `async`**（真实缺陷，2026-09-29 修正）。
-   *
-   * 本插件 8 个既有适配器的 `listAllModels()` 全是同步返回 `readonly {...}[]`
-   * （见 `llm-adapter.ts:789`、`raccoon-adapter.ts:229` 等），
-   * `channel-pack-rpc.ts` 的接口（`:587` / `:641` 的 `ModelCatalogSource`）也是同步，
-   * 且两处消费者**都不 await**：
-   * - `:2041` `catalog = [...all]`
-   * - `:2125` `ids = all.map((model) => model.id)`
-   *
-   * 早期这里写成 `async`，返回的是 Promise —— Promise **不是** `undefined`，
-   * 故两处都会走进 `all !== undefined` 分支并抛
-   * `TypeError: all is not iterable` / `TypeError: all.map is not a function`
-   * ⇒「显示列表」与「关闭全部」两个功能同时崩。
-   *
-   * 当时未被发现，是因为 minimax 尚未接入 `src/index.ts` 的 `modelAdapters`
-   * （无调用方），一旦接线即爆发。
-   *
-   * ⚠️ 读缓存而非 `await loadModels()` 是**正确**的：RPC 路径在调用本方法**之前**
-   * 已先 `await llm.listModels(provider)`（`channel-pack-rpc.ts:2011`），
-   * 而 `listModels` 内部会 `await this.loadModels()` 落缓存。
-   * 与 `raccoon-adapter.ts:229-232` 逐字同构。
-   */
-  listAllModels() {
-    const source = this.remoteModels ?? minimaxFallbackEntries(this.product);
-    return source.map((model) => ({ id: model.id, name: model.name }));
-  }
-  inputModalitiesFor(entry) {
-    return entry?.supportsImage === true ? ["text", "image"] : ["text"];
-  }
-  async listModels(_provider) {
-    if (!await providerCatalogVisible(this.options.accountPool, this.product.id)) return [];
-    const all = await this.loadModels();
-    const disabled = this.options.accountPool?.disabledModelsFor(this.product.id);
-    const listed = disabled === void 0 || disabled.size === 0 ? all : all.filter((model) => !disabled.has(model.id));
-    return listed.map((model) => ({
-      provider: this.product.id,
-      id: model.id,
-      name: model.name,
-      inputModalities: this.inputModalitiesFor(model)
-    }));
-  }
-  async resolveModel(provider, model, _signal) {
-    const all = await this.loadModels();
-    const entry = all.find((item) => item.id === model);
-    const resolved = {
-      provider,
-      id: model,
-      name: entry?.name ?? model,
-      inputModalities: this.inputModalitiesFor(entry)
-    };
-    if (entry !== void 0 && entry.contextWindow > 0) {
-      resolved.context = { contextWindow: entry.contextWindow };
-    }
-    const maxTokens = entry?.maxTokens;
-    if (maxTokens !== void 0 && Number.isSafeInteger(maxTokens) && maxTokens > 0) {
-      resolved.defaultMaxTokens = maxTokens;
-    }
-    if (entry !== void 0) {
-      const reasoning = minimaxReasoningInfo(entry);
-      if (reasoning !== void 0) resolved.reasoning = reasoning;
-    }
-    return resolved;
-  }
-  /** 兼容 0.1.1-rc.2 的 `prepareCall` shim（与其余适配器同款）。 */
-  async prepareCall(provider, model, signal) {
-    return {
-      model: await this.resolveModel(provider, model, signal),
-      stream: (options) => this.stream(options)
-    };
-  }
-  /**
-   * 走 **Anthropic Messages** 协议发一次流式请求。
-   *
-   * ⚠️ 凭据过期先静默续期一次（与其余九个适配器同款）。
-   *
-   * ⚠️ **错误必须抛错**，不静默返回空流（Qoder 早期同型缺陷）。
-   */
-  async *stream(options) {
-    let credential = await this.options.resolveCredential(options.model);
-    if (credential === void 0 || isMinimaxExpired(credential)) {
-      await this.options.refresh();
-      credential = await this.options.resolveCredential(options.model);
-    }
-    if (credential === void 0 || credential.access_token === "") {
-      throw new LlmError16("minimax: no usable credential; log in first", "MISSING_CREDENTIAL");
-    }
-    const entry = (await this.loadModels()).find((item) => item.id === options.model);
-    const imageRefs = /* @__PURE__ */ new Map();
-    for (const message2 of options.messages) {
-      if (Array.isArray(message2.content)) collectImages4(message2.content, imageRefs);
-    }
-    let images;
-    if (imageRefs.size > 0) {
-      if (entry?.supportsImage !== true) {
-        throw new LlmError16(
-          `minimax: \u6A21\u578B "${options.model}" \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165`,
-          "UNSUPPORTED_CONTENT"
-        );
-      }
-      if (this.options.readImage === void 0) {
-        throw new LlmError16(
-          "minimax: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1\uFF08readImage \u672A\u63D0\u4F9B\uFF09",
-          "UNSUPPORTED_CONTENT"
-        );
-      }
-      images = /* @__PURE__ */ new Map();
-      const readImage = this.options.readImage;
-      for (const [id, ref] of imageRefs) {
-        const inline = await readImage(ref);
-        if (inline === void 0) continue;
-        images.set(id, {
-          mediaType: inline.mediaType,
-          data: Buffer.from(inline.data).toString("base64")
-        });
-      }
-    }
-    const requiresAdaptiveThinking = options.model.startsWith(MINIMAX_ADAPTIVE_ONLY_PREFIX);
-    const requested = options.reasoningEffort === void 0 ? void 0 : String(options.reasoningEffort);
-    const declared = entry === void 0 ? void 0 : minimaxReasoningInfo(entry);
-    const effort = requested !== void 0 && declared?.efforts.some((e) => String(e.id) === requested) === true ? requested : void 0;
-    const payload = buildMinimaxMessagesPayload({
-      model: options.model,
-      messages: options.messages,
-      system: options.system,
-      tools: options.tools,
-      temperature: options.temperature,
-      maxTokens: options.maxTokens,
-      stop: options.stop,
-      effort,
-      requiresAdaptiveThinking,
-      ...images === void 0 ? {} : { images }
-    });
-    const response = await fetch(`${this.product.apiHost}${MINIMAX_INFER_PATH}`, {
-      method: "POST",
-      headers: minimaxInferHeaders(credential),
-      body: JSON.stringify(payload),
-      signal: options.signal
-    }).then(checkQueuedResponse);
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      const code = response.status === 402 ? "QUOTA_EXCEEDED" : httpErrorCode5(response.status);
-      throw new LlmError16(
-        `minimax: HTTP ${response.status}${text === "" ? "" : ` \u2014 ${text.slice(0, 500)}`}`,
-        code,
-        { status: response.status }
-      );
-    }
-    if (response.body === null) {
-      throw new LlmError16("minimax: \u54CD\u5E94\u7F3A\u5C11 body", "EMPTY_RESPONSE");
-    }
-    yield* consumeMinimaxSse({ body: response.body, signal: options.signal });
-  }
-};
-function registerMinimaxLlm(ctx, options) {
-  const product = options.product ?? MINIMAX;
-  const adapter = withQueueAccountRotation(product.id, options, (scoped) => new MinimaxAdapter(scoped));
-  registerAdapterIdempotent(ctx.llm, [product.id], adapter);
-  return adapter;
 }
 
 // vendor/channel-pack/src/gemini-auth.ts
@@ -63132,7 +63182,7 @@ function apply(ctx, config = {}) {
     const resolved = await ctx.credentials.resolve(credentialRef14(refName));
     if (!resolved) return void 0;
     try {
-      return JSON.parse(resolved.value);
+      return parseStoredCredential(resolved.value);
     } catch {
       return void 0;
     }
@@ -63198,7 +63248,7 @@ function apply(ctx, config = {}) {
       const resolved = await ctx.credentials.resolve(credentialRef14(BUDDY_CREDENTIAL_REF));
       if (!resolved) return void 0;
       try {
-        return JSON.parse(resolved.value);
+        return parseStoredCredential(resolved.value);
       } catch {
         return void 0;
       }
@@ -63227,7 +63277,7 @@ function apply(ctx, config = {}) {
       const resolved = await ctx.credentials.resolve(credentialRef14(LOBSTERAI.defaultCredentialRef));
       if (!resolved) return void 0;
       try {
-        return JSON.parse(resolved.value);
+        return parseStoredCredential(resolved.value);
       } catch {
         return void 0;
       }
@@ -63258,7 +63308,7 @@ function apply(ctx, config = {}) {
       const resolved = await ctx.credentials.resolve(credentialRef14(TRAE.defaultCredentialRef));
       if (!resolved) return void 0;
       try {
-        return JSON.parse(resolved.value);
+        return parseStoredCredential(resolved.value);
       } catch {
         return void 0;
       }
@@ -63289,7 +63339,7 @@ function apply(ctx, config = {}) {
       const resolved = await ctx.credentials.resolve(credentialRef14(CLINE.defaultCredentialRef));
       if (!resolved) return void 0;
       try {
-        return JSON.parse(resolved.value);
+        return parseStoredCredential(resolved.value);
       } catch {
         return void 0;
       }
@@ -63315,7 +63365,7 @@ function apply(ctx, config = {}) {
     const resolved = await ctx.credentials.resolve(credentialRef14(refName));
     if (!resolved) return void 0;
     try {
-      return JSON.parse(resolved.value);
+      return parseStoredCredential(resolved.value);
     } catch {
       return void 0;
     }
@@ -63366,7 +63416,7 @@ function apply(ctx, config = {}) {
       const resolved = await ctx.credentials.resolve(credentialRef14(LOOMY.defaultCredentialRef));
       if (!resolved) return void 0;
       try {
-        return JSON.parse(resolved.value);
+        return parseStoredCredential(resolved.value);
       } catch {
         return void 0;
       }
@@ -63378,7 +63428,7 @@ function apply(ctx, config = {}) {
       else await loomy.refresh(signal);
       const resolved = await ctx.credentials.resolve(credentialRef14(entry?.credentialRef ?? LOOMY.defaultCredentialRef));
       if (!resolved) throw new Error("loomy: credential no longer exists");
-      return JSON.parse(resolved.value);
+      return parseStoredCredential(resolved.value);
     },
     nextAccount: async (modelId, tried) => {
       const candidates = pool.listAccountsByProvider(LOOMY.id).filter((account) => account.enabled && !tried.has(account.id)).filter((account) => !account.modelRateLimits?.[modelId] || Date.now() >= account.modelRateLimits[modelId]).map((account) => ({ id: account.id, credentialRef: account.credentialRef }));
@@ -63399,7 +63449,7 @@ function apply(ctx, config = {}) {
       if (resolved === void 0) return [];
       let credential;
       try {
-        credential = JSON.parse(resolved.value);
+        credential = parseStoredCredential(resolved.value);
       } catch {
         return [];
       }
@@ -63427,7 +63477,7 @@ function apply(ctx, config = {}) {
       const resolved = await ctx.credentials.resolve(credentialRef14(MINIMAX.defaultCredentialRef));
       if (!resolved) return void 0;
       try {
-        return JSON.parse(resolved.value);
+        return parseStoredCredential(resolved.value);
       } catch {
         return void 0;
       }
@@ -63477,7 +63527,7 @@ function apply(ctx, config = {}) {
       const resolved = await ctx.credentials.resolve(credentialRef14(GEMINI.defaultCredentialRef));
       if (!resolved) return void 0;
       try {
-        return JSON.parse(resolved.value);
+        return parseStoredCredential(resolved.value);
       } catch {
         return void 0;
       }
@@ -63607,7 +63657,7 @@ function apply(ctx, config = {}) {
           let parsed = {};
           if (resolved !== void 0) {
             try {
-              parsed = JSON.parse(resolved.value);
+              parsed = parseStoredCredential(resolved.value);
             } catch {
             }
           }

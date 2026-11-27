@@ -31,6 +31,7 @@ import {
   setGatewayDesiredEnabled,
 } from './openai-gateway/runtime.js'
 import type { CodeArtsAuth } from './service.js'
+import { parseStoredCredential } from './types.js'
 import type { CodeArtsCredential } from './types.js'
 import type { BuddyAuth } from './buddy-auth.js'
 import type { LobsteraiAuth } from './lobsterai-auth.js'
@@ -292,7 +293,7 @@ export function normalizeZcodeLoginProvider(raw: string | undefined): ZcodeLogin
 /** 解析 Buddy 凭据 JSON；解析失败返回 undefined。 */
 function parseBuddyCredential(raw: string): BuddyCredential | undefined {
   try {
-    const parsed = JSON.parse(raw) as BuddyCredential
+    const parsed = parseStoredCredential<BuddyCredential>(raw)
     return typeof parsed === 'object' && parsed !== null && typeof parsed.access_token === 'string'
       ? parsed
       : undefined
@@ -304,7 +305,7 @@ function parseBuddyCredential(raw: string): BuddyCredential | undefined {
 /** 解析 CodeArts 凭据 JSON；解析失败返回 undefined。 */
 function parseCodeArtsCredential(raw: string): CodeArtsCredential | undefined {
   try {
-    const parsed = JSON.parse(raw) as CodeArtsCredential
+    const parsed = parseStoredCredential<CodeArtsCredential>(raw)
     return typeof parsed === 'object' && parsed !== null && typeof parsed.access_key_id === 'string'
       ? parsed
       : undefined
@@ -316,7 +317,7 @@ function parseCodeArtsCredential(raw: string): CodeArtsCredential | undefined {
 /** 解析 LobsterAI 凭据 JSON；解析失败返回 undefined。 */
 function parseLobsteraiCredential(raw: string): LobsteraiCredential | undefined {
   try {
-    const parsed = JSON.parse(raw) as LobsteraiCredential
+    const parsed = parseStoredCredential<LobsteraiCredential>(raw)
     return typeof parsed === 'object' && parsed !== null && typeof parsed.access_token === 'string'
       ? parsed
       : undefined
@@ -328,7 +329,7 @@ function parseLobsteraiCredential(raw: string): LobsteraiCredential | undefined 
 /** 解析 Qoder 凭据 JSON；解析失败返回 undefined。 */
 function parseQoderCredential(raw: string): QoderCredential | undefined {
   try {
-    const parsed = JSON.parse(raw) as QoderCredential
+    const parsed = parseStoredCredential<QoderCredential>(raw)
     return typeof parsed === 'object' && parsed !== null && typeof parsed.access_token === 'string'
       ? parsed
       : undefined
@@ -340,7 +341,7 @@ function parseQoderCredential(raw: string): QoderCredential | undefined {
 /** 解析 TRAE 凭据 JSON；解析失败返回 undefined。 */
 function parseTraeCredential(raw: string): TraeCredential | undefined {
   try {
-    const parsed = JSON.parse(raw) as TraeCredential
+    const parsed = parseStoredCredential<TraeCredential>(raw)
     return typeof parsed === 'object' && parsed !== null && typeof parsed.access_token === 'string'
       ? parsed
       : undefined
@@ -352,7 +353,7 @@ function parseTraeCredential(raw: string): TraeCredential | undefined {
 /** 解析 Cline 凭据 JSON；解析失败返回 undefined。 */
 function parseClineCredential(raw: string): ClineCredential | undefined {
   try {
-    const parsed = JSON.parse(raw) as ClineCredential
+    const parsed = parseStoredCredential<ClineCredential>(raw)
     return typeof parsed === 'object' && parsed !== null && typeof parsed.access_token === 'string'
       ? parsed
       : undefined
@@ -554,7 +555,7 @@ export async function collectCreditsStatus<TCredential = BuddyCredential, TProdu
     try {
       const resolved = await deps.resolve(credentialRef(entry.credentialRef))
       if (resolved !== undefined) {
-        const credential = JSON.parse(resolved.value) as TCredential
+        const credential = parseStoredCredential(resolved.value) as TCredential
         status = await fetchStatus(credential, product)
       }
     } catch (error) {
@@ -605,7 +606,7 @@ export async function collectClaimResults<TCredential = BuddyCredential, TProduc
       if (resolved === undefined) {
         outcome = { kind: 'failed', code: -1, message: '凭据未配置' }
       } else {
-        const credential = JSON.parse(resolved.value) as TCredential
+        const credential = parseStoredCredential(resolved.value) as TCredential
         if (!precheck) {
           // 领取流程自带状态判断（LobsterAI 的 slot/context 检查在 claim 内部）。
           outcome = await claim(credential, product, entry)
@@ -673,7 +674,7 @@ export async function collectCreditBalances<TCredential = BuddyCredential, TProd
       if (resolved === undefined) {
         error = '凭据未配置'
       } else {
-        const credential = JSON.parse(resolved.value) as TCredential
+        const credential = parseStoredCredential(resolved.value) as TCredential
         if (fetchDetailed !== undefined) {
           // 带原因的查询：实现自己决定「非积分账户」等业务状态的文案。
           const detailed = await fetchDetailed(credential, product)
@@ -1237,7 +1238,7 @@ function registerChannelPackEndpoints(
       try {
         const resolved = await ctx.credentials.resolve(credentialRef(account.credentialRef))
         if (!resolved) { out.push(account); continue }
-        const credential = JSON.parse(resolved.value) as ZcodeCredential
+        const credential = parseStoredCredential(resolved.value) as ZcodeCredential
         const accountName = typeof credential.account_name === 'string'
           && credential.account_name.trim().length > 0
           ? credential.account_name.trim()
@@ -2132,7 +2133,7 @@ function registerChannelPackEndpoints(
         if (entry.provider === ZCODE.id) {
           let parsed: unknown
           try {
-            parsed = JSON.parse(resolved.value)
+            parsed = parseStoredCredential(resolved.value)
           } catch {
             return { ok: true, value: { done: false } }
           }
@@ -2242,7 +2243,7 @@ function registerChannelPackEndpoints(
           // raccoon 只有**一项**一次性奖励（桌面端登录奖励 3000 分），
           // 把它映射成 Loomy 那套「任务」形状的一项，复用同一个 RPC 与 UI。
           // ⚠️ 已领状态靠**账单反查**（服务端没有单独的状态端点）。
-          const credential = JSON.parse(resolved.value) as RaccoonCredential
+          const credential = parseStoredCredential(resolved.value) as RaccoonCredential
           const status = await raccoon!.fetchOnboardingStatus(credential)
           return {
             ok: true,
@@ -2256,7 +2257,7 @@ function registerChannelPackEndpoints(
             } satisfies RpcOnboardingStatusResponse,
           }
         }
-        const credential = JSON.parse(resolved.value) as LoomyCredential
+        const credential = parseStoredCredential(resolved.value) as LoomyCredential
         const state = await loomy.fetchOnboardingTasks(credential)
         return {
           ok: true,
@@ -2356,7 +2357,7 @@ function registerChannelPackEndpoints(
           // 无关。早期在 `already-claimed` 分支写 `earned: 0`，于是 UI 显示
           // 「✅ 1 个此前已完成 / 累计已领 0 / 3000」—— **自相矛盾**：
           // 既然「此前已完成」，那 3000 分显然已经拿到手了。
-          const credential = JSON.parse(resolved.value) as RaccoonCredential
+          const credential = parseStoredCredential(resolved.value) as RaccoonCredential
           const outcome = await raccoon!.claimLoginReward(credential)
           if (outcome.kind === 'failed') {
             return { ok: false, error: { code: 'bad-request', message: outcome.message } }
@@ -2382,7 +2383,7 @@ function registerChannelPackEndpoints(
             } satisfies RpcOnboardingClaimResponse,
           }
         }
-        const credential = JSON.parse(resolved.value) as LoomyCredential
+        const credential = parseStoredCredential(resolved.value) as LoomyCredential
         const result = await loomy.claimOnboardingTasks(credential)
         return {
           ok: true,
@@ -2680,7 +2681,7 @@ function registerChannelPackEndpoints(
             }
             let credential: LoomyCredential
             try {
-              credential = JSON.parse(resolved.value) as LoomyCredential
+              credential = parseStoredCredential(resolved.value) as LoomyCredential
             } catch {
               values.push({
                 accountId: account.id, nickname: account.nickname,
@@ -2771,7 +2772,7 @@ function registerChannelPackEndpoints(
             } else {
               let credential: ZcodeCredential | undefined
               try {
-                credential = JSON.parse(resolved.value) as ZcodeCredential
+                credential = parseStoredCredential(resolved.value) as ZcodeCredential
               } catch {
                 credential = undefined
               }
@@ -2808,7 +2809,9 @@ function registerChannelPackEndpoints(
             value: { results, summary: computeClaimSummary(outcomes) } satisfies RpcCreditsClaimAllResponse,
           }
         }
-        return { ok: false, error: { code: 'bad-request', message: `unsupported provider: ${req.provider}` } }
+        // Gemini 等渠道只有余额/配额查询，没有每日签到端点。这里给一句用户能
+        // 看懂的原因，而不是把内部 `unsupported provider` 抛到面板上。
+        return { ok: false, error: { code: 'bad-request', message: `该渠道没有每日签到（${req.provider}）` } }
       }
 
       // 积分余额（Credits Balance）：逐账号顺序查询。
@@ -2896,7 +2899,7 @@ function registerChannelPackEndpoints(
             }
             let credential: QoderCredential
             try {
-              credential = JSON.parse(resolved.value) as QoderCredential
+              credential = parseStoredCredential(resolved.value) as QoderCredential
             } catch {
               values.push({
                 accountId: account.id, nickname: account.nickname,
@@ -3074,7 +3077,7 @@ function registerChannelPackEndpoints(
             }
             let credential: ClineCredential
             try {
-              credential = JSON.parse(resolved.value) as ClineCredential
+              credential = parseStoredCredential(resolved.value) as ClineCredential
             } catch {
               values.push({
                 accountId: account.id, nickname: account.nickname,
@@ -3113,7 +3116,7 @@ function registerChannelPackEndpoints(
             }
             let credential: LoomyCredential
             try {
-              credential = JSON.parse(resolved.value) as LoomyCredential
+              credential = parseStoredCredential(resolved.value) as LoomyCredential
             } catch {
               values.push({
                 accountId: account.id, nickname: account.nickname,
@@ -3146,7 +3149,7 @@ function registerChannelPackEndpoints(
             }
             let credential: RaccoonCredential
             try {
-              credential = JSON.parse(resolved.value) as RaccoonCredential
+              credential = parseStoredCredential(resolved.value) as RaccoonCredential
             } catch {
               values.push({
                 accountId: account.id, nickname: account.nickname,
@@ -3187,7 +3190,7 @@ function registerChannelPackEndpoints(
             }
             let credential: ZcodeCredential
             try {
-              credential = JSON.parse(resolved.value) as ZcodeCredential
+              credential = parseStoredCredential(resolved.value) as ZcodeCredential
             } catch {
               values.push({
                 accountId: account.id, nickname: account.nickname,
@@ -3270,7 +3273,7 @@ function registerChannelPackEndpoints(
           }
           let credential: ClineCredential
           try {
-            credential = JSON.parse(resolved.value) as ClineCredential
+            credential = parseStoredCredential(resolved.value) as ClineCredential
           } catch {
             values.push({
               accountId: account.id, nickname: account.nickname,

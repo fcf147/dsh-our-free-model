@@ -21,6 +21,7 @@
  */
 
 import { Service, type Context } from '@deepseek-ai/cordis'
+import { parseStoredCredential } from './types.js'
 import { LlmError } from '@deepseek-ai/dsh-llm'
 import { credentialRef, type CredentialRef } from '@deepseek-ai/dsh-credentials'
 import {
@@ -182,7 +183,7 @@ declare module '@deepseek-ai/cordis' {
 /** 从存储值解析凭据 JSON；解析失败返回 undefined。 */
 function parseCredential(value: string): LoomyCredential | undefined {
   try {
-    const parsed = JSON.parse(value) as LoomyCredential
+    const parsed = parseStoredCredential<LoomyCredential>(value)
     return typeof parsed === 'object' && parsed !== null && typeof parsed.access_token === 'string'
       ? parsed
       : undefined

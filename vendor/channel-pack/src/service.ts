@@ -8,6 +8,7 @@ import {
   exchangeRefreshToken,
   keyPairFromStoredJwk,
 } from './oauth.js'
+import { parseStoredCredential } from './types.js'
 import type { CodeArtsCredential, LoginFlowOptions, LoginFlowResult, ProviderAccountEntry } from './types.js'
 import { AccountPool } from './account-pool.js'
 import { SerialQueue } from './serial-queue.js'
@@ -91,7 +92,7 @@ declare module '@deepseek-ai/cordis' {
 /** 从存储值解析凭据 JSON；解析失败返回 undefined。 */
 function parseCredential(value: string): CodeArtsCredential | undefined {
   try {
-    return JSON.parse(value) as CodeArtsCredential
+    return parseStoredCredential<CodeArtsCredential>(value)
   } catch {
     return undefined
   }
