@@ -301,6 +301,22 @@ try {
   console.log('ok  共享渠道余额：十渠道能力、失败原因、重试、签到反馈和请求交错')
   console.log('ok  共享渠道卡片：批量开关、单次请求、重复点击保护和失败恢复')
 
+  // Manual "check in all now": an explicit click must run even when the switch
+  // is off and today's automatic round already happened.
+  {
+    const providersBefore = (await call('usage.autoCheckin', {})).value.autoCheckin
+    assert.equal(typeof providersBefore.enabled, 'boolean')
+    const manual = await call('usage.claimAllNow', {})
+    assert.equal(manual.ok, true, 'manual check-in is answered')
+    assert.ok(Array.isArray(manual.value.result.providers), 'it reports which channels it walked')
+    assert.ok(Array.isArray(manual.value.result.channels), 'and the per-channel text')
+    assert.equal(typeof manual.value.result.summary, 'string')
+    assert.equal(typeof manual.value.result.markedToday, 'boolean')
+    assert.equal(manual.value.autoCheckin.running, false, 'the manual round has finished by the time it answers')
+    assert.ok(manual.value.autoCheckin.channels.length > 0, 'the status light shows this round')
+    console.log('ok  manual check-in: usage.claimAllNow walks every channel and returns its own result')
+  }
+
   // The retained OFM anonymous lane still enumerates and streams without any
   // account, independently of the disabled vendored OpenCode provider.
   if (!process.argv.includes('--channels-only')) {
@@ -1581,3 +1597,4 @@ async function verifyGatewayToolCallFrames() {
   ], '按客户端累加器拼接后，工具名与 id 不能重复')
   console.log('ok  openai-gateway tool-call frames: id/name 只在首帧、index 从 0 起，客户端拼接后工具名不重复')
 }
+

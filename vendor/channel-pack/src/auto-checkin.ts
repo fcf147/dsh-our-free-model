@@ -466,6 +466,18 @@ export interface AutoCheckinDeps {
 }
 
 /** 自动签到执行体。 */
+/** 「立即全部签到」（手动）的执行结果，直接回给面板渲染。 */
+export interface RunNowResult {
+  /** 本轮真正跑过 `claimAll` 的渠道 id（升序）。 */
+  providers: string[]
+  /** 逐渠道文本结果（与状态灯的 `channels` 同形）。 */
+  channels: Array<{ provider: string; text: string }>
+  /** 一句话汇总（与 `lastResult` 同形）。 */
+  summary: string
+  /** 这一轮是否被记入「今天已签到」。 */
+  markedToday: boolean
+}
+
 export interface AutoCheckin {
   /** 实时状态（供 RPC 与状态灯；`enabled` 等取自内存，不重新读盘）。 */
   state(): RpcUsageAutoCheckinState
@@ -479,6 +491,15 @@ export interface AutoCheckin {
    * 故下一轮跑出新结果时它会重新出现。
    */
   dismiss(): Promise<RpcUsageAutoCheckinState>
+  /**
+   * 立刻跑一轮**全部渠道**的签到，无视开关与「今天已跑过」的判据。
+   *
+   * 这是面板上「立即全部签到」按钮的入口：用户显式点了就永远放行
+   * （`performRun` 文档里的约定）。跑完仍会写文档，让状态灯与逐渠道明细
+   * 立刻反映这一轮；但**当天是否算已签**仍按 `shouldMarkToday` 判定 ——
+   * 一轮全部失败的强制签到不该让当天账目变成「已处理」。
+   */
+  runNow(): Promise<RunNowResult>
   /** 启动时调用一次：延迟后排定一轮（内部自己判开关与当天是否已跑）。 */
   start(): void
   /** 立刻按判据跑一轮（供「刚打开开关」与单测用）。 */
@@ -493,7 +514,7 @@ export function createAutoCheckin(deps: AutoCheckinDeps): AutoCheckin {
   let doc = deps.store.load()
   let running = false
   /** 在飞去重：`setEnabled(true)` 与启动排定可能同时想跑。 */
-  let inflight: Promise<void> | null = null
+  let inflight: Promise<RunNowResult | undefined> | null = null
   let pending: { cancel(): void } | null = null
 
   let tick: { cancel(): void } | null = null
@@ -516,7 +537,7 @@ export function createAutoCheckin(deps: AutoCheckinDeps): AutoCheckin {
     }
   }
 
-  async function performRun(): Promise<void> {
+  async function performRun(options: { force?: boolean } = {}): Promise<RunNowResult | undefined> {
     lastAttemptAt = now()
     const totals = emptyTotals()
     let providers: string[] = []
@@ -525,7 +546,7 @@ export function createAutoCheckin(deps: AutoCheckinDeps): AutoCheckin {
     } catch (error) {
       // 账号池读不出来：不记日期，下次启动重试。
       deps.warn?.(`[channel-pack] 自动签到：读取账号池失败，本次跳过: ${String(error)}`)
-      return
+      return options.force === true ? { providers: [], channels: [], summary: '读取账号池失败', markedToday: false } : undefined
     }
     const channels: Array<{ provider: string; text: string }> = []
     for (const provider of providers) {
@@ -587,7 +608,22 @@ export function createAutoCheckin(deps: AutoCheckinDeps): AutoCheckin {
       deps.warn?.(
         `[channel-pack] 自动签到未记入今日（下次启动会重试）：${describeRun(totals)}`,
       )
-      return
+      if (options.force !== true) return undefined
+      // 手动强制签到：结果仍要显示（用户点了按钮必须看到发生了什么），但
+      // lastDate 不更新 —— 否则「全部失败」会被记成当天已处理。
+      doc = {
+        ...doc,
+        lastResult: describeRun(totals),
+        lastAt: now(),
+        channels,
+        dismissedRunAt: 0,
+      }
+      try {
+        await deps.store.save(doc)
+      } catch (error) {
+        deps.warn?.(`[channel-pack] 手动签到结果写入失败: ${String(error)}`)
+      }
+      return { providers, channels, summary: doc.lastResult, markedToday: false }
     }
 
     doc = {
@@ -607,21 +643,23 @@ export function createAutoCheckin(deps: AutoCheckinDeps): AutoCheckin {
       deps.warn?.(`[channel-pack] 自动签到结果写入失败（今天可能重复触发一次）: ${String(error)}`)
     }
     deps.warn?.(`[channel-pack] 自动签到完成（${today()}）：${doc.lastResult}`)
+    return { providers, channels, summary: doc.lastResult, markedToday: true }
   }
 
-  function runIfDue(): Promise<void> {
-    if (inflight !== null) return inflight
-    if (!doc.enabled) return Promise.resolve()
-    if (doc.lastDate !== '' && doc.lastDate === today()) return Promise.resolve()
+  async function runIfDue(): Promise<void> {
+    if (inflight !== null) { await inflight; return }
+    if (!doc.enabled) return
+    if (doc.lastDate !== '' && doc.lastDate === today()) return
     running = true
     const task = performRun().catch((error: unknown) => {
       deps.warn?.(`[channel-pack] 自动签到异常: ${String(error)}`)
+      return undefined
     }).finally(() => {
       running = false
       inflight = null
     })
     inflight = task
-    return task
+    await task
   }
 
   return {
@@ -664,6 +702,21 @@ export function createAutoCheckin(deps: AutoCheckinDeps): AutoCheckin {
       }
     },
     runIfDue,
+    async runNow() {
+      // 已有一轮在跑：等它结束，再跑这一次（手动操作必须给出自己的结果）。
+      if (inflight !== null) { try { await inflight } catch { /* 上一轮的错误已经告警过 */ } }
+      running = true
+      const task = performRun({ force: true }).catch((error: unknown) => {
+        deps.warn?.(`[channel-pack] 手动签到异常: ${String(error)}`)
+        return undefined
+      }).finally(() => {
+        running = false
+        inflight = null
+      })
+      inflight = task
+      const result = await task
+      return result ?? { providers: [], channels: [], summary: '签到未完成', markedToday: false }
+    },
     async dismiss() {
       // 记「关闭的是哪一轮」（当前的 lastAt）：下一轮跑完 lastAt 会变，文字自动回来。
       doc = { ...doc, dismissedRunAt: doc.lastAt }

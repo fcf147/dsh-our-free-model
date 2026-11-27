@@ -209,5 +209,48 @@ await check('默认常量符合设计（巡检 2.5h、退避 1h）', async () =>
   assert.equal(AUTO_CHECKIN_RETRY_MS, 60 * 60 * 1000)
 })
 
+await check('runNow() 无视开关与日期，跑完全部渠道并返回逐渠道结果', async () => {
+  // 今天已跑过 + 开关关闭：自动路径会被拦住，手动按钮必须仍然执行。
+  const { checkin, stored, state } = harness({ doc: { enabled: false, lastDate: '2026-10-27' } })
+  state.providers = ['alpha', 'beta']
+  const result = await checkin.runNow()
+  assert.deepEqual(state.claims, ['alpha', 'beta'], '手动签到遍历全部有账号的渠道')
+  assert.deepEqual(result.providers, ['alpha', 'beta'])
+  assert.equal(result.channels.length, 2)
+  assert.equal(result.markedToday, false, 'coversToday=false 时不得记成今天已签')
+  assert.equal(stored.lastDate, '2026-10-27', '已有的日期不被手动签到改写')
+  checkin.stop()
+})
+
+await check('runNow() 在全渠道都能证明“今天已处理”时记入今日', async () => {
+  const { checkin, stored } = harness({ doc: { enabled: false } })
+  // 换一个 coversToday=true 的执行体：断言的是记账口径，不是渠道实现。
+  const due = createAutoCheckin({
+    store: { load: () => stored, save: value => Object.assign(stored, value), flush() {} },
+    now: () => utc8('2026-10-27', 16),
+    listProviderIds: async () => ['alpha'],
+    claim: async () => ({ ok: true, value: { summary: { claimed: 0, alreadyClaimed: 1, coversToday: 1 }, accounts: [] } }),
+    delayMs: 0, tickMs: 0, warn() {},
+  })
+  const result = await due.runNow()
+  assert.equal(result.markedToday, true, 'coversToday 能被证明时记入今日')
+  assert.equal(stored.lastDate, '2026-10-27')
+  due.stop()
+  checkin.stop()
+})
+
+await check('runNow() 在已有轮次进行中时排队而不是并发打上游', async () => {
+  const { checkin, state } = harness()
+  // 用 runIfDue 制造在飞轮次，再让 runNow 排队（内部 await 在飞轮次后才跑）。
+  const first = checkin.runIfDue()
+  const second = checkin.runNow()
+  await Promise.all([first, second])
+  assert.equal(state.claims.length > 0, true, '两轮都执行了')
+  const snapshot = checkin.state()
+  assert.equal(snapshot.running, false, '两轮结束后不在运行态')
+  assert.ok(snapshot.channels.length > 0, '结果已写入状态灯')
+  checkin.stop()
+})
+
 console.log(`\n${checks} 项跨天巡检检查通过`)
 fs.rmSync(scratch, { recursive: true, force: true })

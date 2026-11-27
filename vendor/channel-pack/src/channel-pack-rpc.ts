@@ -32,7 +32,7 @@ import {
 } from './openai-gateway/runtime.js'
 import type { CodeArtsAuth } from './service.js'
 import { parseStoredCredential } from './types.js'
-import type { CodeArtsCredential } from './types.js'
+import type { CodeArtsCredential , RpcUsageClaimAllNowResponse } from './types.js'
 import type { BuddyAuth } from './buddy-auth.js'
 import type { LobsteraiAuth } from './lobsterai-auth.js'
 import type { QoderAuth } from './qoder-auth.js'
@@ -4153,6 +4153,18 @@ function registerChannelPackEndpoints(
           }
         }
         const value: RpcUsageAutoCheckinResponse = { autoCheckin: await autoCheckin.setEnabled(req.enabled) }
+        return { ok: true, value }
+      }
+
+      /**
+       * 立即把**全部有账号的渠道**签到一轮（面板上的「立即全部签到」按钮）。
+       *
+       * 与 `usage.autoCheckin` 的分工：这条只管跑一轮并回结果，开关与「今天
+       * 是否已签」都不改判据 —— 跑完仍由 `shouldMarkToday` 决定是否记入今日。
+       */
+      case 'usage.claimAllNow': {
+        const result = await autoCheckin.runNow()
+        const value: RpcUsageClaimAllNowResponse = { autoCheckin: autoCheckin.state(), result }
         return { ok: true, value }
       }
 

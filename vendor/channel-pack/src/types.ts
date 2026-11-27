@@ -1447,6 +1447,23 @@ export interface RpcUsageAutoCheckinResponse {
   autoCheckin: RpcUsageAutoCheckinState
 }
 
+/**
+ * RPC: 「立即全部签到」（手动，`usage.claimAllNow`）。
+ *
+ * 与自动签到共用同一条执行链路，但**无视开关与当天判据**：这是用户显式点的。
+ * `result.markedToday` 说明这一轮是否被记成「今天已签到」—— 全部失败时它是
+ * `false`，当天账目保持未处理，下次启动仍会自动重试。
+ */
+export interface RpcUsageClaimAllNowResponse {
+  autoCheckin: RpcUsageAutoCheckinState
+  result: {
+    providers: string[]
+    channels: Array<{ provider: string; text: string }>
+    summary: string
+    markedToday: boolean
+  }
+}
+
 // ── Restored account channels (CodeArts / Huawei Cloud) ───────────────────────
 // These types were removed with the channel in 6fba52d and are restored here
 // for the from-history channel implementation. They are additive: no existing

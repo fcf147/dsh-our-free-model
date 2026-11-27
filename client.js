@@ -753,6 +753,10 @@ window.__ModuleLoader__.load({
         'chan.auto.ran': '今日已自动签到',
         'chan.auto.off': '今日尚未签到',
         'chan.auto.last': '上次结果：{result}',
+        'chan.claimall.button': '立即全部签到',
+        'chan.claimall.running': '签到中…',
+        'chan.claimall.done': '签到完成',
+        'chan.claimall.failed': '签到失败：{reason}',
         'nav.tab.aggregate': '聚合渠道',
         'nav.tab.workspace': '模型工作台（magpie）',
         'engine.start': '打开工作台',
@@ -1712,6 +1716,10 @@ window.__ModuleLoader__.load({
         'chan.auto.ran': 'Checked in today',
         'chan.auto.off': 'Not checked in today',
         'chan.auto.last': 'Last result: {result}',
+        'chan.claimall.button': 'Check in all now',
+        'chan.claimall.running': 'Checking in…',
+        'chan.claimall.done': 'Check-in finished',
+        'chan.claimall.failed': 'Check-in failed: {reason}',
         'nav.tab.aggregate': 'Aggregate',
         'nav.tab.workspace': 'Model workspace (magpie)',
         'engine.start': 'Open workspace',
@@ -6132,6 +6140,25 @@ window.__ModuleLoader__.load({
       const toggleAuto = async () => {
         try { const value = await rpc('usage.autoCheckin', { enabled: auto?.enabled !== true }, 60_000); setAuto(value?.autoCheckin ?? null) } catch { /* the status refresh tells */ }
       }
+      // Manual "check in all channels now": the auto engine ignores its own
+      // switch/date gate for an explicit click but still reports each channel.
+      const [claimBusy, setClaimBusy] = useState(false)
+      const [claimNotice, setClaimNotice] = useState('')
+      const claimAllNow = async () => {
+        if (claimBusy) return
+        setClaimBusy(true)
+        setClaimNotice('')
+        try {
+          const value = await rpc('usage.claimAllNow', {}, 300_000)
+          setAuto(value?.autoCheckin ?? null)
+          const summary = value?.result?.summary
+          setClaimNotice(typeof summary === 'string' && summary !== '' ? summary : t('chan.claimall.done'))
+        } catch (failure) {
+          setClaimNotice(t('chan.claimall.failed').replace('{reason}', String(failure?.message ?? failure)))
+        } finally {
+          setClaimBusy(false)
+        }
+      }
       const [statuses, setStatuses] = useState(undefined)
       const [error, setError] = useState('')
       const pack = summary?.channels ?? { state: 'pending', error: '' }
@@ -6221,6 +6248,12 @@ window.__ModuleLoader__.load({
             h(Pill, { tone: auto.running === true ? 'warn' : auto.ranToday === true ? 'ok' : '' },
               auto.running === true ? t('chan.auto.running') : auto.ranToday === true ? t('chan.auto.ran') : t('chan.auto.off')),
             typeof auto.lastResult === 'string' && auto.lastResult !== '' ? h('span', { className: 'ofm_note', title: auto.lastResult }, t('chan.auto.last').replace('{result}', auto.lastResult.length > 60 ? `${auto.lastResult.slice(0, 60)}…` : auto.lastResult)) : null)),
+          available && auto !== null ? h('div', { className: 'ofm_row' },
+            h(Button, {
+              type: 'button', className: 'ofm_btn', disabled: claimBusy || !ready,
+              'aria-busy': claimBusy ? 'true' : undefined, onClick: () => void claimAllNow(),
+            }, claimBusy ? t('chan.claimall.running') : t('chan.claimall.button')),
+            claimNotice !== '' ? h('span', { className: 'ofm_note', role: 'status' }, claimNotice) : null) : null,
         failed ? h('div', { className: 'ofm_callout ofm_error' },
           h('div', null, t('chan.pack.failed').replace('{reason}', pack.error ?? ''), h('div', { className: 'ofm_note' }, t('chan.pack.hint')))) : null,
         !available ? h('div', { className: 'ofm_callout' }, h('div', null, t('chan.rpc.unavailable'))) : null,
